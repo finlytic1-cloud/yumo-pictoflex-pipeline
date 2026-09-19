@@ -4,13 +4,12 @@ Stage 2: Publish rendered posts to Instagram + TikTok via Post for Me.
 
 Run daily (e.g. Render Cron Job at 10:00), a few hours after Stage 1.
 
-For each brand:
-  - Work out how many posts have already been published today (so re-runs
-    or a delayed cron don't over-publish).
-  - Pull up to (POSTS_PER_BRAND_PER_DAY - already_published_today) posts
-    that are rendered and ready, best quality_score first.
-  - Publish each one via Post for Me. One post's failure is recorded and
-    does not stop the others.
+For each brand: publish every post that's rendered and ready (within the
+lookback window), best quality_score first. No daily-count cap - Stage 1
+is what controls volume (it only ever generates 3/brand/day), so Stage 2
+just publishes whatever Stage 1 produced. A generous safety limit still
+applies purely to stop a runaway bug from mass-publishing, not as a
+day-to-day business rule.
 """
 import json
 
@@ -21,29 +20,16 @@ import db
 from utils import log, retry, TransientHTTPError
 
 
-def already_published_today(brand: str) -> int:
-    row = db.fetch_one(
-        """
-        SELECT count(*) AS n FROM content_items
-        WHERE brand = %s AND status = 'published' AND published_at::date = (now() AT TIME ZONE 'utc')::date;
-        """,
-        (brand,),
-    )
-    return row["n"] if row else 0
-
-
-def get_posts_to_publish(brand: str, limit: int) -> list[dict]:
-    if limit <= 0:
-        return []
+def get_posts_to_publish(brand: str) -> list[dict]:
     return db.fetch_all(
         """
         SELECT id, hook, caption, hashtags, image_urls
         FROM content_items
         WHERE brand = %s AND status = 'rendered' AND created_at > now() - interval '18 hours'
         ORDER BY (quality_score->>'weighted_total')::numeric DESC NULLS LAST
-        LIMIT %s;
+        LIMIT 50;
         """,
-        (brand, limit),
+        (brand,),
     )
 
 
@@ -98,12 +84,9 @@ def process_brand(brand_cfg: dict) -> None:
         log.warning("No Post for Me social accounts configured for %s - skipping.", brand)
         return
 
-    published_today = already_published_today(brand)
-    remaining = config.POSTS_PER_BRAND_PER_DAY - published_today
-    log.info("=== Stage 2: %s (already published today: %d, remaining budget: %d) ===",
-              brand, published_today, remaining)
+    log.info("=== Stage 2: %s ===", brand)
 
-    posts = get_posts_to_publish(brand, remaining)
+    posts = get_posts_to_publish(brand)
     if not posts:
         log.info("Nothing to publish for %s right now.", brand)
         return
