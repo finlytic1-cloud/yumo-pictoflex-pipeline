@@ -287,17 +287,17 @@ def mark_failed(content_item_id: int, error_message: str) -> None:
 # ---------------------------------------------------------------------------
 
 @retry(times=3, base_delay=2.0, exceptions=(TransientHTTPError, requests.exceptions.RequestException))
-def fetch_rendered_image(brand_cfg: dict, slide_text: str) -> bytes:
+def fetch_rendered_image(template_id: str, text_field: str, slide_text: str) -> bytes:
     resp = requests.get(
-        f"https://render.imejis.io/v1/{brand_cfg['imejis_template_id']}",
+        f"https://render.imejis.io/v1/{template_id}",
         params={
             "dma-api-key": config.IMEJIS_API_KEY,
-            f"{brand_cfg['imejis_text_field']}.text": slide_text,
-            f"{brand_cfg['imejis_text_field']}.color": "ffffff",
-            f"{brand_cfg['imejis_text_field']}.backgroundColor": "transparent",
-            f"{brand_cfg['imejis_text_field']}.textBackgroundColor": "transparent",
-            f"{brand_cfg['imejis_text_field']}.borderColor": "transparent",
-            f"{brand_cfg['imejis_text_field']}.strokeColor": "transparent",
+            f"{text_field}.text": slide_text,
+            f"{text_field}.color": "ffffff",
+            f"{text_field}.backgroundColor": "transparent",
+            f"{text_field}.textBackgroundColor": "transparent",
+            f"{text_field}.borderColor": "transparent",
+            f"{text_field}.strokeColor": "transparent",
             # IMPORTANT: TikTok's photo-post endpoint rejects PNG outright.
             # jpg is required, not png - this was the root cause of a long
             # debugging saga during the n8n build. Do not change back to png.
@@ -332,8 +332,19 @@ def upload_to_supabase(file_path: str, image_bytes: bytes) -> str:
 
 def render_carousel(content_item_id: int, brand: str, brand_cfg: dict, slides: list[str]) -> list[str]:
     image_urls = []
+    use_hook_template = bool(config.HOOK_IMEJIS_TEMPLATE_ID and config.HOOK_IMEJIS_TEXT_FIELD)
     for idx, slide_text in enumerate(slides):
-        image_bytes = fetch_rendered_image(brand_cfg, slide_text)
+        if idx == 0 and use_hook_template:
+            # Slide 1: the real-photo "hook" template, shared across both
+            # brands, with the post's hook text overlaid as the scroll-stopper.
+            template_id = config.HOOK_IMEJIS_TEMPLATE_ID
+            text_field = config.HOOK_IMEJIS_TEXT_FIELD
+        else:
+            # Slides 2+ (or slide 1 if no hook template is configured):
+            # the brand's normal black-background content template.
+            template_id = brand_cfg["imejis_template_id"]
+            text_field = brand_cfg["imejis_text_field"]
+        image_bytes = fetch_rendered_image(template_id, text_field, slide_text)
         file_path = f"{brand}/{content_item_id}/slide_{idx}.jpg"
         public_url = upload_to_supabase(file_path, image_bytes)
         image_urls.append(public_url)
