@@ -63,8 +63,23 @@ def extract_json(text: str) -> dict:
         cleaned = fence_match.group(1).strip()
     try:
         return json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"could not parse JSON from model output: {exc}\nraw: {text[:2000]}") from exc
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: the model sometimes writes reasoning prose before/after the
+    # JSON object instead of returning pure JSON (seen in QC scoring calls
+    # that "think out loud" first). Grab the outermost {...} span and try
+    # that instead of giving up.
+    first_brace = cleaned.find("{")
+    last_brace = cleaned.rfind("}")
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        candidate = cleaned[first_brace:last_brace + 1]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"could not parse JSON from model output: {exc}\nraw: {text[:2000]}") from exc
+
+    raise ValueError(f"could not parse JSON from model output: no JSON object found\nraw: {text[:2000]}")
 
 
 class TransientHTTPError(Exception):
