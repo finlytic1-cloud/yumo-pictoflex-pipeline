@@ -127,8 +127,7 @@ def get_recent_content_summary(brand: str) -> str:
             'No recent content yet.'
         ) AS summary
         FROM content_items
-        WHERE brand = %s AND created_at > now() - interval '14 days'
-        ORDER BY NULL;
+        WHERE brand = %s AND created_at > now() - interval '14 days';
         """,
         (brand,),
     )
