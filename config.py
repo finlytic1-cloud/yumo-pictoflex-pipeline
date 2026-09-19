@@ -54,6 +54,14 @@ BRAVE_API_KEY = env("BRAVE_API_KEY", required=True)
 # ---------------------------------------------------------------------------
 IMEJIS_API_KEY = env("IMEJIS_API_KEY", required=True)
 
+# Slide 1 ("hook slide") is rendered on a separate photo template shared by
+# both brands - a real photo with the post's hook text overlaid on it, used
+# as the scroll-stopper. Slides 2+ keep using each brand's normal
+# IMEJIS_TEMPLATE_ID_* template. Optional: if unset, all slides fall back to
+# the brand's normal template as before.
+HOOK_IMEJIS_TEMPLATE_ID = env("HOOK_IMEJIS_TEMPLATE_ID", "")
+HOOK_IMEJIS_TEXT_FIELD = env("HOOK_IMEJIS_TEXT_FIELD", "")
+
 # ---------------------------------------------------------------------------
 # Post for Me
 # ---------------------------------------------------------------------------
