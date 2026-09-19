@@ -199,16 +199,21 @@ factual_accuracy, platform_suitability, repetition_risk (10 = not repetitive at 
 Post:
 {json.dumps(post, ensure_ascii=False)}
 
-Return ONLY valid JSON, no markdown fences:
-{{"hook_strength": 0, "brand_fit": 0, "audience_relevance": 0, "originality": 0, "clarity": 0, "value": 0,
-"conversion_potential": 0, "factual_accuracy": 0, "platform_suitability": 0, "repetition_risk": 0,
-"weighted_total": 0-100, "pass": true/false, "failure_reasons": ["..."]}}
-
 A post should only pass if weighted_total >= {config.QC_PASS_THRESHOLD}, factual_accuracy >= {config.QC_MIN_FACTUAL_ACCURACY},
 and repetition_risk >= {config.QC_MIN_REPETITION_SCORE}. Compute weighted_total yourself as the average of
 the 9 category scores scaled to 100, and set pass accordingly.
+
+Do not explain your reasoning or think out loud. Do not write any prose before or after the JSON.
+Respond with ONLY the JSON object below, filled in, and nothing else - no markdown fences, no commentary:
+{{"hook_strength": 0, "brand_fit": 0, "audience_relevance": 0, "originality": 0, "clarity": 0, "value": 0,
+"conversion_potential": 0, "factual_accuracy": 0, "platform_suitability": 0, "repetition_risk": 0,
+"weighted_total": 0-100, "pass": true/false, "failure_reasons": ["..."]}}
 """
-    raw = anthropic_call(system, user, max_tokens=1200, temperature=0.3)
+    # max_tokens is generous here: if the model narrates its reasoning
+    # before the JSON despite being told not to, it needs enough room left
+    # to still reach and complete the JSON object rather than getting cut
+    # off mid-reasoning (this happened in testing with a tighter limit).
+    raw = anthropic_call(system, user, max_tokens=2500, temperature=0.3)
     return extract_json(raw)
 
 
