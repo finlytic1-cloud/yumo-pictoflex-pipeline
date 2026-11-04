@@ -89,6 +89,7 @@ CAROUSEL_FORMAT_RULES = """
 CAROUSEL FORMAT RULES (important - read carefully):
 - Each slide is text overlaid on an image, viewed for 1-2 seconds while scrolling. Every slide must be SHORT: one punchy line or at most two short lines. Never write a paragraph on a slide. If you find yourself writing more than about 15-20 words for a single slide, cut it down or split the idea differently - compact and sweet, not dense.
 - Do NOT include a final "visit our website/download now" slide with a link (e.g. do not end with "yumoapp.co" as a slide). The account bio already has the link - carousels should end on a strong closing thought, a punchy one-liner, or a short call-to-action phrase with NO url attached. The caption (separate field) is where the link-related CTA belongs, not the image slides.
+- The "caption" field must be exactly ONE short sentence (about 20 words or fewer): no paragraphs, no line breaks, no lists, no URLs. Put hashtags only in the separate "hashtags" field (3-5 relevant hashtags).
 - Aim for 3-4 slides total per post (hook + 1-2 content slides + a short closing line) rather than a fixed 5 - whatever best fits the idea without padding.
 """.strip()
 
