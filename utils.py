@@ -87,7 +87,7 @@ class TransientHTTPError(Exception):
 
 
 @retry(times=3, base_delay=3.0, exceptions=(TransientHTTPError, requests.exceptions.RequestException))
-def anthropic_call(system: str, user: str, max_tokens: int = 4000, temperature: float = 1.0) -> str:
+def anthropic_call(system: str, user: str, max_tokens: int = 4000, temperature: float = 1.0, model: str | None = None) -> str:
     """Calls Claude and returns the text of the first content block."""
     resp = requests.post(
         "https://api.anthropic.com/v1/messages",
@@ -97,7 +97,7 @@ def anthropic_call(system: str, user: str, max_tokens: int = 4000, temperature: 
             "content-type": "application/json",
         },
         json={
-            "model": config.CLAUDE_MODEL,
+            "model": model or config.CLAUDE_MODEL,
             "max_tokens": max_tokens,
             "temperature": temperature,
             "system": system,
@@ -107,7 +107,10 @@ def anthropic_call(system: str, user: str, max_tokens: int = 4000, temperature: 
     )
     if resp.status_code == 429 or resp.status_code >= 500:
         raise TransientHTTPError(f"Anthropic {resp.status_code}: {resp.text[:500]}")
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        raise requests.exceptions.HTTPError(
+            f"Anthropic {resp.status_code}: {resp.text[:500]}", response=resp
+        )
     data = resp.json()
     blocks = data.get("content", [])
     text_parts = [b.get("text", "") for b in blocks if b.get("type") == "text"]
