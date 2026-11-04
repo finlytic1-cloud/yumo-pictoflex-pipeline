@@ -43,6 +43,8 @@ SUPABASE_STORAGE_BUCKET = env("SUPABASE_STORAGE_BUCKET", "carousel-images")
 # ---------------------------------------------------------------------------
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", required=True)
 CLAUDE_MODEL = env("CLAUDE_MODEL", "claude-sonnet-4-6")
+# Cheaper model for scoring/QC calls; defaults to the main model if unset.
+CLAUDE_MODEL_FAST = env("CLAUDE_MODEL_FAST", CLAUDE_MODEL)
 
 # ---------------------------------------------------------------------------
 # Brave Search
