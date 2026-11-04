@@ -76,7 +76,7 @@ def score_trends(brand_cfg: dict, snippets: list[dict]) -> list[dict]:
         '{"trends": [{"trend_description": "...", "relevance_score": 0-10, "decision": "use|ignore", "reasoning": "..."}]}'
     )
     try:
-        raw = anthropic_call(system, user, max_tokens=1500)
+        raw = anthropic_call(system, user, max_tokens=1500, model=config.CLAUDE_MODEL_FAST)
         parsed = extract_json(raw)
         return parsed.get("trends", [])
     except Exception as exc:  # noqa: BLE001
@@ -213,7 +213,7 @@ Respond with ONLY the JSON object below, filled in, and nothing else - no markdo
     # before the JSON despite being told not to, it needs enough room left
     # to still reach and complete the JSON object rather than getting cut
     # off mid-reasoning (this happened in testing with a tighter limit).
-    raw = anthropic_call(system, user, max_tokens=2500, temperature=0.3)
+    raw = anthropic_call(system, user, max_tokens=2500, temperature=0.3, model=config.CLAUDE_MODEL_FAST)
     return extract_json(raw)
 
 
