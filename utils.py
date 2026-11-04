@@ -99,7 +99,7 @@ def anthropic_call(system: str, user: str, max_tokens: int = 4000, temperature: 
         json={
             "model": model or config.CLAUDE_MODEL,
             "max_tokens": max_tokens,
-            "temperature": temperature,
+            # temperature intentionally not sent: newer models reject it.
             "system": system,
             "messages": [{"role": "user", "content": user}],
         },
