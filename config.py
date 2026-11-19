@@ -48,8 +48,14 @@ CLAUDE_MODEL_FAST = env("CLAUDE_MODEL_FAST", CLAUDE_MODEL)   # used for QC only
 # ---------------------------------------------------------------------------
 # Higgsfield (optional cinematic opener). Leave the keys empty to skip it.
 # ---------------------------------------------------------------------------
-HIGGSFIELD_KEY_ID = env("HIGGSFIELD_KEY_ID", "")
-HIGGSFIELD_KEY_SECRET = env("HIGGSFIELD_KEY_SECRET", "")
+HIGGSFIELD_KEY_ID = env("HIGGSFIELD_KEY_ID", "").strip().strip('"').strip("'")
+HIGGSFIELD_KEY_SECRET = env("HIGGSFIELD_KEY_SECRET", "").strip().strip('"').strip("'")
+# Also accept the whole key pasted as one "id:secret" value (in either variable, or HIGGSFIELD_KEY).
+_combined = env("HIGGSFIELD_KEY", "").strip()
+for _v in (_combined, HIGGSFIELD_KEY_ID, HIGGSFIELD_KEY_SECRET):
+    if ":" in _v:
+        HIGGSFIELD_KEY_ID, HIGGSFIELD_KEY_SECRET = _v.split(":", 1)
+        break
 HIGGSFIELD_OPENER_MODEL = env("HIGGSFIELD_OPENER_MODEL", "bytedance/seedance-2.5/text-to-video")
 # Extra JSON parameters sent with the prompt. Field names follow the model's docs page.
 HIGGSFIELD_OPENER_PARAMS = env(

@@ -53,30 +53,31 @@ def font(name, size):
 class SDraw:
     """ImageDraw that takes 1080x1920 coordinates and draws on the K x canvas."""
 
-    def __init__(self, img):
+    def __init__(self, img, scale=None):
         self.d = ImageDraw.Draw(img)
+        self.k = K if scale is None else scale
 
-    @staticmethod
-    def _xy(xy):
+    def _xy(self, xy):
+        k = self.k
         if isinstance(xy[0], (tuple, list)):
-            return [(x * K, y * K) for x, y in xy]
-        return [v * K for v in xy]
+            return [(x * k, y * k) for x, y in xy]
+        return [v * k for v in xy]
 
     def line(self, xy, fill=None, width=1, joint=None):
-        self.d.line(self._xy(xy), fill=fill, width=max(1, int(width * K)), joint=joint)
+        self.d.line(self._xy(xy), fill=fill, width=max(1, int(width * self.k)), joint=joint)
 
     def ellipse(self, xy, fill=None, outline=None, width=1):
-        self.d.ellipse(self._xy(xy), fill=fill, outline=outline, width=max(1, int(width * K)))
+        self.d.ellipse(self._xy(xy), fill=fill, outline=outline, width=max(1, int(width * self.k)))
 
     def rounded_rectangle(self, xy, radius=0, fill=None, outline=None, width=1):
-        self.d.rounded_rectangle(self._xy(xy), radius=radius * K, fill=fill, outline=outline,
-                                 width=max(1, int(width * K)))
+        self.d.rounded_rectangle(self._xy(xy), radius=radius * self.k, fill=fill, outline=outline,
+                                 width=max(1, int(width * self.k)))
 
     def polygon(self, xy, fill=None):
         self.d.polygon(self._xy(xy), fill=fill)
 
     def text(self, xy, text, font=None, fill=None):
-        self.d.text((xy[0] * K, xy[1] * K), text, font=font, fill=fill)
+        self.d.text((xy[0] * self.k, xy[1] * self.k), text, font=font, fill=fill)
 
     def textlength(self, text, font=None):
         return self.d.textlength(text, font=font) / K
@@ -224,15 +225,16 @@ def make_background():
 
 
 def make_fades():
-    top = np.zeros((RH, RW, 4), dtype=np.uint8)
+    # Only the strips that fade are stored (not full frames), to save memory.
+    th, bh = 460 * K, 330 * K
+    top = np.zeros((th, RW, 4), dtype=np.uint8)
     top[..., :3] = BG
-    ys = np.arange(RH) / K
-    a = np.clip(1 - (ys - 300) / 160, 0, 1)        # solid to 300px, fades by 460
-    top[..., 3] = (a[:, None] * 255).astype(np.uint8)
-    bot = np.zeros((RH, RW, 4), dtype=np.uint8)
+    ys = np.arange(th) / K
+    top[..., 3] = (np.clip(1 - (ys - 300) / 160, 0, 1)[:, None] * 255).astype(np.uint8)  # solid to 300px
+    bot = np.zeros((bh, RW, 4), dtype=np.uint8)
     bot[..., :3] = BG
-    b = np.clip((ys - (H - 330)) / 150, 0, 1)
-    bot[..., 3] = (b[:, None] * 255).astype(np.uint8)
+    yb = np.arange(bh) / K
+    bot[..., 3] = (np.clip(yb / 150, 0, 1)[:, None] * 255).astype(np.uint8)
     return Image.fromarray(top), Image.fromarray(bot)
 
 
@@ -257,8 +259,9 @@ def to_screen(cam, x, y):
 def draw_workflow(frame, spec, pos, tl, cam, t):
     s = cam[2]
     crisp = Image.new("RGBA", (RW, RH), (0, 0, 0, 0))
-    glow = Image.new("RGBA", (RW, RH), (0, 0, 0, 0))
-    d, g = SDraw(crisp), SDraw(glow)
+    # The glow is blurred anyway, so it's drawn at half resolution to save memory.
+    glow = Image.new("RGBA", (W // 2, H // 2), (0, 0, 0, 0))
+    d, g = SDraw(crisp), SDraw(glow, scale=0.5)
     rows = {n["id"]: n["row"] for n in spec["nodes"]}
     kinds = {n["id"]: n.get("kind", "action") for n in spec["nodes"]}
     overview = ease_in_out((t - tl.zoom_start) / tl.zoom_len)
@@ -361,8 +364,8 @@ def draw_workflow(frame, spec, pos, tl, cam, t):
 # ---------------------------------------------------------------- HUD
 def draw_hud(frame, spec, tl, t, fades):
     top, bot = fades
-    frame.alpha_composite(top)
-    frame.alpha_composite(bot)
+    frame.alpha_composite(top, dest=(0, 0))
+    frame.alpha_composite(bot, dest=(0, RH - bot.height))
     d = SDraw(frame)
     fh = font("InterDisplay-ExtraBold.otf", 74)
 
@@ -495,25 +498,33 @@ def sound_events(spec: dict) -> dict:
             "whoosh": tl.zoom_start, "end": tl.end_start}
 
 
-def render(spec: dict, out_path: str, ffmpeg: str = "ffmpeg") -> float:
-    """Render the workflow video (silent). Returns its duration in seconds."""
+def render_frames(spec: dict, frames_dir: str) -> float:
+    """Draw every frame as a high-quality JPEG (f00000.jpg, ...). Returns the duration.
+
+    assemble.py runs this in a separate process and encodes afterwards, so the
+    drawing memory is fully released before ffmpeg starts (Render's cron plan has 512MB).
+    """
     pos, n_rows, world_h = layout(spec)
     tl = TL(n_rows)
     bg, fades = make_background(), make_fades()
-    proc = subprocess.Popen(
-        [ffmpeg, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
-         "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
-         "-c:v", "libx264", "-preset", os.environ.get("X264_PRESET", "slow"), "-tune", "animation", "-crf", "15",
-         "-profile:v", "high", "-pix_fmt", "yuv420p",
-         "-movflags", "+faststart", out_path],
-        stdin=subprocess.PIPE,
-    )
     for f in range(int(tl.total * FPS)):
-        proc.stdin.write(render_frame(bg, fades, spec, pos, n_rows, world_h, tl, f / FPS).tobytes())
-    proc.stdin.close()
-    if proc.wait() != 0:
-        raise RuntimeError("ffmpeg failed while encoding the workflow video")
+        img = render_frame(bg, fades, spec, pos, n_rows, world_h, tl, f / FPS)
+        img.save(os.path.join(frames_dir, f"f{f:05d}.jpg"), quality=97, subsampling=0)
     return tl.total
+
+
+def render(spec: dict, out_path: str, ffmpeg: str = "ffmpeg") -> float:
+    """Render a silent preview MP4 (local testing)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        total = render_frames(spec, tmp)
+        res = subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-framerate", str(FPS),
+                              "-i", os.path.join(tmp, "f%05d.jpg"), "-c:v", "libx264", "-crf", "16",
+                              "-pix_fmt", "yuv420p", "-movflags", "+faststart", out_path],
+                             capture_output=True, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(res.stderr[-500:])
+    return total
 
 
 SAMPLE = {
@@ -549,6 +560,12 @@ SAMPLE = {
 }
 
 if __name__ == "__main__":
+    import json
     import sys
-    out = sys.argv[1] if len(sys.argv) > 1 else "workflow_sample.mp4"
-    print("duration", render(SAMPLE, out))
+    if len(sys.argv) == 4 and sys.argv[1] == "--frames":
+        # used by assemble.py: python workflow_video.py --frames spec.json out_dir
+        with open(sys.argv[2], encoding="utf-8") as fh:
+            print(render_frames(json.load(fh), sys.argv[3]))
+    else:
+        out = sys.argv[1] if len(sys.argv) > 1 else "workflow_sample.mp4"
+        print("duration", render(SAMPLE, out))
