@@ -49,18 +49,19 @@ def build_reel(spec: dict, out_path: str, opener_path: str | None = None,
         flow = ["-framerate", str(workflow_video.FPS), "-i", os.path.join(frames, "f%05d.jpg")]
         events = workflow_video.sound_events(spec)
 
-        offset = OPENER_SECONDS - XFADE if opener_path else 0.0
+        offset = OPENER_SECONDS if opener_path else 0.0
         total = flow_len + offset
         sfx = os.path.join(tmp, "sfx.wav")
         sound.build_track(events, sfx, offset=offset, total=total)
 
-        # video: opener (scaled to 1080x1920, first 3s) crossfaded into the workflow
+        # video: opener (scaled to 1080x1920, first 3s) dips to black into the workflow.
+        # (fade + concat rather than xfade, which Render's bundled ffmpeg 4.2 doesn't have)
         if opener_path:
             vf = (f"[0:v]trim=0:{OPENER_SECONDS},setpts=PTS-STARTPTS,"
                   "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"
-                  "fps=30,format=yuv420p,setsar=1[o];"
+                  f"fps=30,format=yuv420p,setsar=1,fade=t=out:st={OPENER_SECONDS - XFADE}:d={XFADE}[o];"
                   "[1:v]fps=30,format=yuv420p,setsar=1[f];"
-                  f"[o][f]xfade=transition=fade:duration={XFADE}:offset={OPENER_SECONDS - XFADE}[v]")
+                  "[o][f]concat=n=2:v=1:a=0[v]")
             inputs = ["-i", opener_path, *flow]
             audio_idx = 2
         else:
@@ -77,7 +78,9 @@ def build_reel(spec: dict, out_path: str, opener_path: str | None = None,
             log.info("Mixing music: %s", os.path.basename(music))
         else:
             af = f"[{audio_idx}:a]anull[pre]"
-        af += ";[pre]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=44100[a]"  # social-media loudness
+        # social-media loudness; explicit format so older ffmpeg builds (Render's) can negotiate it
+        af += (";[pre]aformat=sample_fmts=fltp:channel_layouts=stereo,loudnorm=I=-14:TP=-1.5:LRA=11,"
+               "aresample=44100,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a]")
 
         _run([ff, "-y", "-loglevel", "error", *inputs,
               "-filter_complex", vf + ";" + af,
