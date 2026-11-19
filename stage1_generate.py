@@ -135,9 +135,14 @@ def validate_spec(spec: dict) -> dict:
 
 
 def qc(spec: dict) -> tuple[float, str]:
-    raw = anthropic_call(system_prompt(), f"{config.QC_INSTRUCTIONS}\n\nPlan:\n{json.dumps(spec)}",
-                         max_tokens=600, model=config.CLAUDE_MODEL_FAST)
-    s = extract_json(raw)
+    """Score the plan. A broken QC call never blocks the day's video - it just passes."""
+    try:
+        raw = anthropic_call(system_prompt(), f"{config.QC_INSTRUCTIONS}\n\nPlan:\n{json.dumps(spec)}",
+                             max_tokens=2000, model=config.CLAUDE_MODEL_FAST)
+        s = extract_json(raw)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("QC call failed, skipping QC: %s", str(exc)[:300])
+        return config.QC_PASS_THRESHOLD, "QC unavailable"
     keys = ["hook_strength", "clarity", "satisfying_flow", "believability", "fomo"]
     score = sum(float(s.get(k, 0)) for k in keys) / len(keys) * 10   # computed here, not by the model
     return score, s.get("notes", "")

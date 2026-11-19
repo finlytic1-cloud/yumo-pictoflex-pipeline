@@ -110,7 +110,9 @@ Layout rules (the animation engine depends on them):
 - Row 0 has exactly ONE node, kind "trigger". The last row has exactly ONE node, kind "outcome".
 - Include at least one row with 2 or 3 nodes (a branch) and later merge back to 1 node.
 - kinds: "trigger", "ai" (AI understanding/deciding), "action", "outcome" (a business result).
-- 2 or 3 outcome nodes have "value": a realistic whole-number £ amount that outcome is worth in one night/day.
+- 2 or 3 outcome nodes have "value": a realistic whole-number £ amount of revenue or fees that outcome
+  brings the business in one night/day (fees and bookings, NOT property or deal values). Keep totals modest
+  and believable for one night - typically £100-£2,000.
 - Edges only connect a node in row r to a node in row r+1. Every node except row 0 has an incoming edge;
   every node except the last row has an outgoing edge.
 - label: max 30 characters. sub: max 32 characters. Short, concrete, punchy.
