@@ -95,8 +95,8 @@ def validate_spec(spec: dict) -> dict:
     remap = {r: i for i, r in enumerate(rows)}
     for n in nodes:
         n["row"] = remap[n["row"]]
-    if len(rows) < 4 or len(rows) > 7:
-        raise ValueError(f"{len(rows)} rows (need 4-7)")
+    if len(rows) < 4 or len(rows) > 8:
+        raise ValueError(f"{len(rows)} rows (need 4-8)")
     per_row = {}
     for n in nodes:
         per_row.setdefault(n["row"], []).append(n)
@@ -143,14 +143,25 @@ def qc(spec: dict) -> tuple[float, str]:
     return score, s.get("notes", "")
 
 
+def written_and_checked(industry: str, audience: str, feedback: str | None = None) -> dict:
+    """Ask Claude for the workflow; if it breaks a layout rule, ask again with the error (max 3 tries)."""
+    for attempt in range(3):
+        try:
+            return validate_spec(write_spec(industry, audience, feedback=feedback))
+        except (ValueError, KeyError, TypeError) as exc:
+            log.warning("Workflow plan rejected (attempt %d): %s", attempt + 1, exc)
+            feedback = f"Your last plan broke a layout rule: {exc}. Follow the layout rules exactly."
+    raise ValueError("Claude could not produce a valid workflow plan in 3 attempts")
+
+
 def make_spec() -> tuple[dict, float]:
     industry, audience = pick_industry()
     log.info("Today's business type: %s (%s)", industry, audience)
-    spec = validate_spec(write_spec(industry, audience))
+    spec = written_and_checked(industry, audience)
     score, notes = qc(spec)
     log.info("QC score %.0f - %s", score, notes)
     if score < config.QC_PASS_THRESHOLD:
-        spec = validate_spec(write_spec(industry, audience, feedback=notes))
+        spec = written_and_checked(industry, audience, feedback=notes)
         score, notes = qc(spec)
         log.info("QC score after rewrite %.0f - %s", score, notes)
     spec["industry"] = industry
