@@ -86,7 +86,10 @@ class TransientHTTPError(Exception):
     pass
 
 
-@retry(times=3, base_delay=3.0, exceptions=(TransientHTTPError, requests.exceptions.RequestException))
+# Only retry rate limits, server errors and network problems - a 4xx (bad
+# request, wrong model name) won't fix itself, so fail straight away.
+@retry(times=3, base_delay=3.0, exceptions=(TransientHTTPError, requests.exceptions.ConnectionError,
+                                            requests.exceptions.Timeout))
 def anthropic_call(system: str, user: str, max_tokens: int = 4000, temperature: float = 1.0, model: str | None = None) -> str:
     """Calls Claude and returns the text of the first content block."""
     resp = requests.post(

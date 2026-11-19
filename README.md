@@ -1,3 +1,21 @@
+# Pictoflex Labs content pipeline
+
+**Nov 2026: Pictoflex only, one Reel a day.** Yumo posting and Imejis are removed.
+
+- `stage1_generate.py` (daily, e.g. 07:00 UTC): picks a business type (alternating local / high-end), Claude writes an automation workflow as JSON, Python checks it, a cheaper model scores it, then `assemble.py` builds the Reel:
+  - `higgsfield.py`: optional 3-second cinematic opener (skipped if keys are missing, it's over budget, or it fails)
+  - `workflow_video.py`: the animated workflow (drawn at 3x and shrunk, so it's sharp)
+  - `sound.py`: sound design generated to match every on-screen moment, plus an optional music track from `assets/music/`
+- `stage2_publish.py` (daily, 10:00 UTC): posts the Reel to every Pictoflex account through Post for Me (Instagram and Facebook as Reels).
+- `stage3_analytics.py`: unchanged.
+- `fonts/`: Inter (SIL Open Font License, see LICENSE-Inter.txt).
+
+Rendering takes several minutes on the 0.5 CPU / 512MB cron plan. Keep `SUPERSAMPLE=2` there (3 needs about 650MB of RAM).
+
+---
+
+## Previous version (for reference)
+
 # Yumo + Pictoflex content pipeline (n8n replacement)
 
 Plain Python replacing the n8n workflows: Stage 1 (trend research →

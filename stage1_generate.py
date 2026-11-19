@@ -1,324 +1,168 @@
 #!/usr/bin/env python3
 """
-Stage 1: Trend research -> content generation -> QC -> image rendering.
+Stage 1: make today's Pictoflex Reel.
 
-Run daily (e.g. Render Cron Job at 07:00). For each brand:
-  1. Search for current trends relevant to the brand (Brave Search).
-  2. Ask Claude to score which trend (if any) is genuinely usable.
-  3. Log the trend decision.
-  4. Pull a summary of recently published/generated content + learnings,
-     so the generator avoids repeating itself and applies what worked.
-  5. Ask Claude to generate exactly 3 carousel posts, each a different
-     content pillar.
-  6. QC-score each post. If it fails, regenerate once with the failure
-     reasons fed back in, then QC again. If it still fails, it goes to
-     a failed/review queue rather than being published.
-  7. For posts that pass, render each slide into an image (Imejis),
-     re-host the image in Supabase Storage, and mark the post 'rendered'
-     so Stage 2 can publish it.
+Run daily (Render Cron Job, e.g. 07:00 UTC):
+  1. Pick today's business type (alternates local / high-end, no repeats in 14 days).
+  2. Claude designs an automation workflow for it as JSON (the video "script").
+  3. Python checks the layout rules and fixes small problems; a cheaper model scores it.
+     Below the bar -> one rewrite with the feedback.
+  4. Optional: Higgsfield makes a short cinematic opener.
+  5. The workflow is animated in code, with sound design and optional music.
+  6. The MP4 is uploaded to Supabase Storage and saved as status 'rendered' for Stage 2.
 
-One brand's or one post's failure never stops the rest of the run -
-everything below is wrapped so errors are logged and recorded on the
-individual content_item rather than crashing the whole script.
+Failures are recorded on the content_items row (status 'failed' + error_message)
+rather than crashing silently.
 """
+import datetime as dt
 import json
-import time
+import os
+import random
+import tempfile
 
 import requests
 
+import assemble
 import config
 import db
-import reel
+import higgsfield
 from utils import anthropic_call, extract_json, log, retry, TransientHTTPError
 
+BRAND = "pictoflex"
+
 
 # ---------------------------------------------------------------------------
-# Trend research
+# What to make today
 # ---------------------------------------------------------------------------
 
-@retry(times=3, base_delay=3.0, exceptions=(TransientHTTPError, requests.exceptions.RequestException))
-def search_trends(brand_cfg: dict) -> list[dict]:
-    resp = requests.get(
-        "https://api.search.brave.com/res/v1/web/search",
-        headers={
-            "Accept": "application/json",
-            "X-Subscription-Token": config.BRAVE_API_KEY,
-        },
-        params={"q": brand_cfg["trend_query"], "count": 8, "freshness": "pw"},
-        timeout=30,
+def recent_industries() -> set[str]:
+    rows = db.fetch_all(
+        "SELECT content_pillar FROM content_items WHERE brand = %s AND created_at > now() - interval '14 days';",
+        (BRAND,),
     )
-    if resp.status_code == 429 or resp.status_code >= 500:
-        raise TransientHTTPError(f"Brave {resp.status_code}: {resp.text[:300]}")
-    if resp.status_code != 200:
-        log.warning("Brave search returned %s for %s: %s", resp.status_code, brand_cfg["brand"], resp.text[:300])
-        return []
-    results = resp.json().get("web", {}).get("results", [])
-    return [
-        {"title": r.get("title", ""), "description": r.get("description", ""), "url": r.get("url", "")}
-        for r in results[:6]
+    return {r["content_pillar"] for r in rows if r.get("content_pillar")}
+
+
+def pick_industry() -> tuple[str, str]:
+    high_end = dt.date.today().toordinal() % 2 == 0
+    pool = config.HIGH_END_INDUSTRIES if high_end else config.LOCAL_INDUSTRIES
+    audience = "established, higher-revenue businesses" if high_end else "local small businesses in the UK"
+    used = recent_industries()
+    choices = [i for i in pool if i not in used] or pool
+    return random.choice(choices), audience
+
+
+# ---------------------------------------------------------------------------
+# The workflow "script"
+# ---------------------------------------------------------------------------
+
+def system_prompt() -> str:
+    return f"You are the creative director for Pictoflex Labs' short-form video.\n\n{config.PICTOFLEX_FACTS}"
+
+
+def write_spec(industry: str, audience: str, feedback: str | None = None) -> dict:
+    user = config.SPEC_INSTRUCTIONS.format(industry=industry, audience=audience)
+    if feedback:
+        user += f"\n\nA reviewer scored the previous version low. Fix this: {feedback}"
+    raw = anthropic_call(system_prompt(), user, max_tokens=3000)
+    return extract_json(raw)
+
+
+def _cut(s, n):
+    s = (s or "").strip()
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
+
+
+def validate_spec(spec: dict) -> dict:
+    """Enforce the layout rules the animation depends on. Raises ValueError if unusable."""
+    nodes = spec.get("nodes") or []
+    if len(nodes) < 5:
+        raise ValueError("fewer than 5 nodes")
+    ids = set()
+    for n in nodes:
+        n["id"] = str(n["id"])
+        n["row"] = int(n["row"])
+        n["kind"] = n.get("kind") if n.get("kind") in ("trigger", "ai", "action", "outcome") else "action"
+        n["label"] = _cut(n.get("label"), 30)
+        n["sub"] = _cut(n.get("sub"), 32)
+        v = n.get("value")
+        n["value"] = int(v) if isinstance(v, (int, float)) and v > 0 else None
+        if not n["value"]:
+            n.pop("value")
+        ids.add(n["id"])
+    # renumber rows 0..k so gaps don't break the layout
+    rows = sorted({n["row"] for n in nodes})
+    remap = {r: i for i, r in enumerate(rows)}
+    for n in nodes:
+        n["row"] = remap[n["row"]]
+    if len(rows) < 4 or len(rows) > 7:
+        raise ValueError(f"{len(rows)} rows (need 4-7)")
+    per_row = {}
+    for n in nodes:
+        per_row.setdefault(n["row"], []).append(n)
+    if any(len(v) > 3 for v in per_row.values()):
+        raise ValueError("a row has more than 3 nodes")
+    row_of = {n["id"]: n["row"] for n in nodes}
+    edges = []
+    for e in spec.get("edges") or []:
+        a, b = str(e[0]), str(e[1])
+        if a in ids and b in ids and row_of[b] == row_of[a] + 1:
+            edges.append((a, b))
+    # make sure every node is connected in and out
+    last = len(rows) - 1
+    for n in nodes:
+        r = n["row"]
+        if r > 0 and not any(b == n["id"] for _, b in edges):
+            edges.append((per_row[r - 1][0]["id"], n["id"]))
+        if r < last and not any(a == n["id"] for a, _ in edges):
+            edges.append((n["id"], per_row[r + 1][0]["id"]))
+    spec["edges"] = edges
+    spec["nodes"] = nodes
+    spec["hook"] = _cut(spec.get("hook"), 48)
+    spec["overview_line"] = _cut(spec.get("overview_line") or "One system. Running 24/7.", 32)
+    spec["counter_label"] = _cut(spec.get("counter_label"), 32)
+    spec["results_title"] = _cut(spec.get("results_title") or "What you wake up to", 30)
+    spec["cta"] = _cut(spec.get("cta") or "Free automation audit. Link in bio.", 80)
+    notes = spec.get("notifications") or []
+    spec["notifications"] = [
+        {"type": x.get("type", "booking"), "title": _cut(x.get("title"), 26), "body": _cut(x.get("body"), 40)}
+        for x in notes[:4]
     ]
+    if not any(n.get("value") for n in nodes):
+        spec.pop("counter_label", None)
+    spec["tag"] = "Example automation"
+    return spec
 
 
-def score_trends(brand_cfg: dict, snippets: list[dict]) -> list[dict]:
-    if not snippets:
-        return []
-    snippet_text = "\n".join(
-        f"{i+1}. {s['title']} — {s['description']} ({s['url']})" for i, s in enumerate(snippets)
-    )
-    system = (
-        f"You are a trend-relevance scorer for {brand_cfg['brand'].title()}.\n\n{brand_cfg['facts']}\n\n"
-        "You will be given a list of recent web search results. Score how relevant each one is as a "
-        "genuine content angle for this brand. Never force a connection that isn't natural. It's fine "
-        "and expected for most or all of them to be 'ignore'."
-    )
-    user = (
-        f"Candidate trends/search results:\n{snippet_text}\n\n"
-        'Return ONLY valid JSON, no markdown fences: '
-        '{"trends": [{"trend_description": "...", "relevance_score": 0-10, "decision": "use|ignore", "reasoning": "..."}]}'
-    )
-    try:
-        raw = anthropic_call(system, user, max_tokens=1500, model=config.CLAUDE_MODEL_FAST)
-        parsed = extract_json(raw)
-        return parsed.get("trends", [])
-    except Exception as exc:  # noqa: BLE001
-        log.warning("score_trends failed for %s: %s", brand_cfg["brand"], exc)
-        return []
+def qc(spec: dict) -> tuple[float, str]:
+    raw = anthropic_call(system_prompt(), f"{config.QC_INSTRUCTIONS}\n\nPlan:\n{json.dumps(spec)}",
+                         max_tokens=600, model=config.CLAUDE_MODEL_FAST)
+    s = extract_json(raw)
+    keys = ["hook_strength", "clarity", "satisfying_flow", "believability", "fomo"]
+    score = sum(float(s.get(k, 0)) for k in keys) / len(keys) * 10   # computed here, not by the model
+    return score, s.get("notes", "")
 
 
-def pick_best_trend(scored: list[dict]) -> dict | None:
-    usable = [t for t in scored if t.get("decision") == "use"]
-    if not usable:
-        return None
-    return max(usable, key=lambda t: t.get("relevance_score", 0))
-
-
-def log_trend(brand: str, trend: dict | None) -> int | None:
-    if trend is None:
-        row = db.execute(
-            "INSERT INTO trend_log (brand, trend_description, relevance_score, decision, reasoning) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id;",
-            (brand, "no relevant trend found", None, "ignore", "no candidate trend cleared relevance bar"),
-            returning=True,
-        )
-    else:
-        row = db.execute(
-            "INSERT INTO trend_log (brand, trend_description, relevance_score, decision, reasoning) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id;",
-            (
-                brand,
-                trend.get("trend_description"),
-                trend.get("relevance_score"),
-                trend.get("decision"),
-                trend.get("reasoning"),
-            ),
-            returning=True,
-        )
-    return row["id"] if row else None
+def make_spec() -> tuple[dict, float]:
+    industry, audience = pick_industry()
+    log.info("Today's business type: %s (%s)", industry, audience)
+    spec = validate_spec(write_spec(industry, audience))
+    score, notes = qc(spec)
+    log.info("QC score %.0f - %s", score, notes)
+    if score < config.QC_PASS_THRESHOLD:
+        spec = validate_spec(write_spec(industry, audience, feedback=notes))
+        score, notes = qc(spec)
+        log.info("QC score after rewrite %.0f - %s", score, notes)
+    spec["industry"] = industry
+    return spec, score
 
 
 # ---------------------------------------------------------------------------
-# Context gathering (repetition prevention + learning loop input)
-# ---------------------------------------------------------------------------
-
-def get_recent_content_summary(brand: str) -> str:
-    row = db.fetch_one(
-        """
-        SELECT COALESCE(
-            string_agg(DISTINCT content_pillar || ': ' || hook, ' | '),
-            'No recent content yet.'
-        ) AS summary
-        FROM content_items
-        WHERE brand = %s AND created_at > now() - interval '14 days';
-        """,
-        (brand,),
-    )
-    return row["summary"] if row else "No recent content yet."
-
-
-def get_latest_learnings(brand: str) -> str:
-    row = db.fetch_one(
-        """
-        SELECT COALESCE(
-            string_agg(summary, ' | ' ORDER BY created_at DESC),
-            'No learnings recorded yet.'
-        ) AS summary
-        FROM (
-            SELECT summary, created_at FROM learnings
-            WHERE brand = %s
-            ORDER BY created_at DESC
-            LIMIT 5
-        ) recent;
-        """,
-        (brand,),
-    )
-    return row["summary"] if row else "No learnings recorded yet."
-
-
-# ---------------------------------------------------------------------------
-# Content generation
-# ---------------------------------------------------------------------------
-
-def generate_posts(brand_cfg: dict, trend: dict | None, recent_summary: str, learnings: str) -> list[dict]:
-    system = config.build_system_prompt(brand_cfg)
-    trend_text = (
-        f"Trend to consider (only use it if it fits naturally): {trend['trend_description']} "
-        f"(reasoning: {trend.get('reasoning', '')})"
-        if trend
-        else "No usable trend was found today - generate purely from brand strategy and content pillars."
-    )
-    user = f"""{trend_text}
-
-Recent content already published/generated (avoid repeating these hooks/topics/structures):
-{recent_summary}
-
-Learnings from past performance (apply these where relevant):
-{learnings}
-
-{config.GENERATION_TASK_INSTRUCTION}
-"""
-    raw = anthropic_call(system, user, max_tokens=6000)
-    parsed = extract_json(raw)
-    posts = parsed.get("posts", [])
-    if not posts:
-        log.error("Claude returned 0 posts for %s. Raw response: %s", brand_cfg["brand"], raw[:1000])
-    return posts
-
-
-# ---------------------------------------------------------------------------
-# Quality control
-# ---------------------------------------------------------------------------
-
-def qc_score(brand_cfg: dict, post: dict, recent_summary: str) -> dict:
-    system = (
-        f"You are the quality controller for {brand_cfg['brand'].title()}'s content pipeline.\n\n"
-        f"{brand_cfg['facts']}\n\nRecently published content (for repetition scoring):\n{recent_summary}"
-    )
-    user = f"""Score this generated carousel post on each category (0-10):
-hook_strength, brand_fit, audience_relevance, originality, clarity, value, conversion_potential,
-factual_accuracy, platform_suitability, repetition_risk (10 = not repetitive at all).
-
-Post:
-{json.dumps(post, ensure_ascii=False)}
-
-A post should only pass if weighted_total >= {config.QC_PASS_THRESHOLD}, factual_accuracy >= {config.QC_MIN_FACTUAL_ACCURACY},
-and repetition_risk >= {config.QC_MIN_REPETITION_SCORE}. Compute weighted_total yourself as the average of
-the 9 category scores scaled to 100, and set pass accordingly.
-
-Do not explain your reasoning or think out loud. Do not write any prose before or after the JSON.
-Respond with ONLY the JSON object below, filled in, and nothing else - no markdown fences, no commentary:
-{{"hook_strength": 0, "brand_fit": 0, "audience_relevance": 0, "originality": 0, "clarity": 0, "value": 0,
-"conversion_potential": 0, "factual_accuracy": 0, "platform_suitability": 0, "repetition_risk": 0,
-"weighted_total": 0-100, "pass": true/false, "failure_reasons": ["..."]}}
-"""
-    # max_tokens is generous here: if the model narrates its reasoning
-    # before the JSON despite being told not to, it needs enough room left
-    # to still reach and complete the JSON object rather than getting cut
-    # off mid-reasoning (this happened in testing with a tighter limit).
-    raw = anthropic_call(system, user, max_tokens=2500, temperature=0.3, model=config.CLAUDE_MODEL_FAST)
-    return extract_json(raw)
-
-
-def regenerate_post(brand_cfg: dict, post: dict, qc_result: dict, recent_summary: str, learnings: str) -> dict:
-    system = config.build_system_prompt(brand_cfg)
-    user = f"""The following carousel post failed quality control. Rewrite it to fix the specific problems
-listed, while keeping the same general content_pillar and objective unless the problem is the pillar itself.
-
-Original post:
-{json.dumps(post, ensure_ascii=False)}
-
-Quality control failure reasons:
-{json.dumps(qc_result.get('failure_reasons', []), ensure_ascii=False)}
-
-Recent content already published (avoid repeating these):
-{recent_summary}
-
-Learnings to apply:
-{learnings}
-
-Return ONLY valid JSON for the single improved post, no markdown fences:
-{{"content_pillar": "...", "objective": "...", "target_audience": "...", "hook": "...", "slides": ["..."],
-"caption": "...", "cta": "...", "hashtags": "...", "visual_spec": "...", "trend_used": "..."}}
-
-{config.CAROUSEL_FORMAT_RULES}
-"""
-    raw = anthropic_call(system, user, max_tokens=2000)
-    return extract_json(raw)
-
-
-# ---------------------------------------------------------------------------
-# Persist content item
-# ---------------------------------------------------------------------------
-
-def insert_content_item(brand: str, post: dict, quality_score: dict, status: str,
-                         attempt_number: int, trend_id: int | None, platform_target: str) -> int:
-    row = db.execute(
-        """
-        INSERT INTO content_items
-            (brand, content_pillar, objective, target_audience, hook, platform_target,
-             slides, caption, cta, hashtags, visual_spec, trend_used, quality_score, status, attempt_number)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id;
-        """,
-        (
-            brand,
-            post.get("content_pillar"),
-            post.get("objective"),
-            post.get("target_audience"),
-            post.get("hook"),
-            platform_target,
-            json.dumps(post.get("slides", [])),
-            post.get("caption"),
-            post.get("cta"),
-            post.get("hashtags"),
-            json.dumps(post.get("visual_spec", "")),
-            trend_id,
-            json.dumps(quality_score),
-            status,
-            attempt_number,
-        ),
-        returning=True,
-    )
-    return row["id"]
-
-
-def mark_failed(content_item_id: int, error_message: str) -> None:
-    db.execute(
-        "UPDATE content_items SET status = 'failed', error_message = %s WHERE id = %s;",
-        (error_message, content_item_id),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Image rendering
+# Storage
 # ---------------------------------------------------------------------------
 
 @retry(times=3, base_delay=2.0, exceptions=(TransientHTTPError, requests.exceptions.RequestException))
-def fetch_rendered_image(template_id: str, text_field: str, slide_text: str) -> bytes:
-    resp = requests.get(
-        f"https://render.imejis.io/v1/{template_id}",
-        params={
-            "dma-api-key": config.IMEJIS_API_KEY,
-            f"{text_field}.text": slide_text,
-            f"{text_field}.color": "ffffff",
-            f"{text_field}.backgroundColor": "transparent",
-            f"{text_field}.textBackgroundColor": "transparent",
-            f"{text_field}.borderColor": "transparent",
-            f"{text_field}.strokeColor": "transparent",
-            # IMPORTANT: TikTok's photo-post endpoint rejects PNG outright.
-            # jpg is required, not png - this was the root cause of a long
-            # debugging saga during the n8n build. Do not change back to png.
-            "format": "jpg",
-        },
-        timeout=60,
-    )
-    if resp.status_code == 429 or resp.status_code >= 500:
-        raise TransientHTTPError(f"Imejis {resp.status_code}: {resp.text[:300]}")
-    resp.raise_for_status()
-    return resp.content
-
-
-@retry(times=3, base_delay=2.0, exceptions=(TransientHTTPError, requests.exceptions.RequestException))
-def upload_to_supabase(file_path: str, image_bytes: bytes, content_type: str = "image/jpeg") -> str:
+def upload_to_supabase(file_path: str, data: bytes, content_type: str) -> str:
     resp = requests.post(
         f"{config.SUPABASE_URL}/storage/v1/object/{config.SUPABASE_STORAGE_BUCKET}/{file_path}",
         headers={
@@ -327,8 +171,8 @@ def upload_to_supabase(file_path: str, image_bytes: bytes, content_type: str = "
             "Content-Type": content_type,
             "x-upsert": "true",
         },
-        data=image_bytes,
-        timeout=60,
+        data=data,
+        timeout=120,
     )
     if resp.status_code == 429 or resp.status_code >= 500:
         raise TransientHTTPError(f"Supabase upload {resp.status_code}: {resp.text[:300]}")
@@ -336,135 +180,46 @@ def upload_to_supabase(file_path: str, image_bytes: bytes, content_type: str = "
     return f"{config.SUPABASE_URL}/storage/v1/object/public/{config.SUPABASE_STORAGE_BUCKET}/{file_path}"
 
 
-def render_carousel(content_item_id: int, brand: str, brand_cfg: dict, slides: list[str]) -> list[str]:
-    image_urls = []
-    slide_images = []
-    use_hook_template = bool(config.HOOK_IMEJIS_TEMPLATE_ID and config.HOOK_IMEJIS_TEXT_FIELD)
-    for idx, slide_text in enumerate(slides):
-        if idx == 0 and use_hook_template:
-            # Slide 1: the real-photo "hook" template, shared across both
-            # brands, with the post's hook text overlaid as the scroll-stopper.
-            template_id = config.HOOK_IMEJIS_TEMPLATE_ID
-            text_field = config.HOOK_IMEJIS_TEXT_FIELD
-        else:
-            # Slides 2+ (or slide 1 if no hook template is configured):
-            # the brand's normal black-background content template.
-            template_id = brand_cfg["imejis_template_id"]
-            text_field = brand_cfg["imejis_text_field"]
-        image_bytes = fetch_rendered_image(template_id, text_field, slide_text)
-        file_path = f"{brand}/{content_item_id}/slide_{idx}.jpg"
-        public_url = upload_to_supabase(file_path, image_bytes)
-        image_urls.append(public_url)
-        slide_images.append(image_bytes)
-        time.sleep(1.5)  # be gentle with Imejis rate limits
-
-    # Optional: also build a vertical video Reel (Instagram/Facebook) from the slides.
-    # Failure here must never block the normal image post.
-    if brand_cfg.get("reel_accounts") and slide_images:
-        try:
-            video = reel.make_reel(slide_images)
-            upload_to_supabase(f"{brand}/{content_item_id}/reel.mp4", video, content_type="video/mp4")
-            log.info("%s content_item %d reel built (%d KB)", brand, content_item_id, len(video) // 1024)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Reel build failed for %s content_item %d (images still fine): %s", brand, content_item_id, exc)
-    return image_urls
-
-
 # ---------------------------------------------------------------------------
-# Per-post pipeline (generate -> QC -> maybe regenerate -> render)
+# Main
 # ---------------------------------------------------------------------------
-
-def process_post(brand_cfg: dict, post: dict, trend_id: int | None, recent_summary: str, learnings: str) -> None:
-    brand = brand_cfg["brand"]
-    try:
-        qc1 = qc_score(brand_cfg, post, recent_summary)
-    except Exception as exc:  # noqa: BLE001
-        log.error("QC attempt 1 failed for %s post %r: %s", brand, post.get("hook"), exc)
-        content_item_id = insert_content_item(brand, post, {"error": str(exc)}, "failed", 1, trend_id,
-                                               brand_cfg["platform_target"])
-        mark_failed(content_item_id, f"QC attempt 1 errored: {exc}")
-        return
-
-    if qc1.get("pass"):
-        content_item_id = insert_content_item(brand, post, qc1, "approved", 1, trend_id, brand_cfg["platform_target"])
-    else:
-        log.info("%s post %r failed QC1 (%s) - regenerating", brand, post.get("hook"), qc1.get("failure_reasons"))
-        try:
-            improved = regenerate_post(brand_cfg, post, qc1, recent_summary, learnings)
-            qc2 = qc_score(brand_cfg, improved, recent_summary)
-        except Exception as exc:  # noqa: BLE001
-            log.error("Regeneration/QC2 failed for %s post %r: %s", brand, post.get("hook"), exc)
-            content_item_id = insert_content_item(brand, post, qc1, "failed", 2, trend_id, brand_cfg["platform_target"])
-            mark_failed(content_item_id, f"regeneration errored: {exc}")
-            return
-
-        if qc2.get("pass"):
-            content_item_id = insert_content_item(brand, improved, qc2, "approved", 2, trend_id, brand_cfg["platform_target"])
-            post = improved
-        else:
-            log.info("%s post %r failed QC2 too - moving to review queue", brand, post.get("hook"))
-            content_item_id = insert_content_item(brand, improved, qc2, "rejected", 2, trend_id, brand_cfg["platform_target"])
-            return
-
-    # Render images for approved posts.
-    try:
-        image_urls = render_carousel(content_item_id, brand, brand_cfg, post.get("slides", []))
-        db.execute(
-            "UPDATE content_items SET status = 'rendered', image_urls = %s WHERE id = %s;",
-            (json.dumps(image_urls), content_item_id),
-        )
-        log.info("%s content_item %d rendered with %d slides", brand, content_item_id, len(image_urls))
-    except Exception as exc:  # noqa: BLE001
-        log.error("Image rendering failed for %s content_item %d: %s", brand, content_item_id, exc)
-        mark_failed(content_item_id, f"image rendering errored: {exc}")
-
-
-# ---------------------------------------------------------------------------
-# Per-brand pipeline
-# ---------------------------------------------------------------------------
-
-def process_brand(brand_cfg: dict) -> None:
-    brand = brand_cfg["brand"]
-    log.info("=== Stage 1: %s ===", brand)
-
-    try:
-        snippets = search_trends(brand_cfg)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Trend search failed for %s, continuing without a trend: %s", brand, exc)
-        snippets = []
-
-    scored = score_trends(brand_cfg, snippets)
-    trend = pick_best_trend(scored)
-    trend_id = log_trend(brand, trend)
-
-    recent_summary = get_recent_content_summary(brand)
-    learnings = get_latest_learnings(brand)
-
-    try:
-        posts = generate_posts(brand_cfg, trend, recent_summary, learnings)
-    except Exception as exc:  # noqa: BLE001
-        log.error("Content generation failed entirely for %s: %s", brand, exc)
-        return
-
-    if not posts:
-        log.error("No posts generated for %s today - nothing to process.", brand)
-        return
-
-    for post in posts:
-        try:
-            process_post(brand_cfg, post, trend_id, recent_summary, learnings)
-        except Exception as exc:  # noqa: BLE001
-            # Absolute last-resort catch so one bad post never kills the run.
-            log.error("Unhandled error processing a post for %s: %s", brand, exc)
-
 
 def main() -> None:
-    for brand_cfg in config.BRANDS.values():
-        try:
-            process_brand(brand_cfg)
-        except Exception as exc:  # noqa: BLE001
-            log.error("Unhandled error processing brand %s: %s", brand_cfg["brand"], exc)
-    log.info("Stage 1 complete.")
+    spec, score = make_spec()
+    row = db.execute(
+        """
+        INSERT INTO content_items
+            (brand, content_pillar, objective, hook, platform_target, caption, cta, hashtags,
+             visual_spec, quality_score, status, attempt_number)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'approved', 1) RETURNING id;
+        """,
+        (BRAND, spec["industry"], "workflow_reel", spec["hook"], "instagram,tiktok,facebook,linkedin",
+         _cut(spec.get("caption"), 160), spec["cta"], spec.get("hashtags"),
+         json.dumps(spec), json.dumps({"weighted_total": round(score)})),
+        returning=True,
+    )
+    item_id = row["id"]
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            opener = None
+            if spec.get("opener_prompt"):
+                try:
+                    opener = higgsfield.generate_opener(spec["opener_prompt"], os.path.join(tmp, "opener.mp4"))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Opener failed, continuing without it: %s", exc)
+            out = os.path.join(tmp, "reel.mp4")
+            assemble.build_reel(spec, out, opener_path=opener, music_dir=config.MUSIC_DIR)
+            with open(out, "rb") as fh:
+                data = fh.read()
+            url = upload_to_supabase(f"{BRAND}/{item_id}/reel.mp4", data, "video/mp4")
+        db.execute("UPDATE content_items SET status = 'rendered', image_urls = %s WHERE id = %s;",
+                   (json.dumps([url]), item_id))
+        log.info("Reel %d ready (%d KB, opener: %s): %s", item_id, len(data) // 1024, bool(opener), url)
+    except Exception as exc:  # noqa: BLE001
+        log.error("Rendering failed for content_item %d: %s", item_id, exc)
+        db.execute("UPDATE content_items SET status = 'failed', error_message = %s WHERE id = %s;",
+                   (str(exc)[:2000], item_id))
+        raise
 
 
 if __name__ == "__main__":
