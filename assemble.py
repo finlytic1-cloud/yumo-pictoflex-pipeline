@@ -9,6 +9,7 @@ import sys
 import tempfile
 
 import sound
+import voice
 import workflow_video
 from utils import log
 
@@ -28,6 +29,19 @@ def _run(cmd: list[str]) -> None:
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
     if res.returncode != 0:
         raise RuntimeError(f"ffmpeg failed: {res.stderr[-800:]}")
+
+
+def _cues(events: dict, offset: float) -> dict:
+    """When each voiceover line should start (seconds into the finished video)."""
+    pops = events["pops"]
+    build = pops[1][0] if len(pops) > 1 else pops[0][0]
+    return {
+        "hook": 0.3,
+        "build": offset + build,
+        "reveal": offset + events["whoosh"] + 0.3,
+        "results": offset + (events["dings"][0] if events["dings"] else events["whoosh"] + 2),
+        "cta": offset + events["end"] + 0.2,
+    }
 
 
 def build_reel(spec: dict, out_path: str, opener_path: str | None = None,
@@ -70,14 +84,36 @@ def build_reel(spec: dict, out_path: str, opener_path: str | None = None,
             audio_idx = 1
         inputs += ["-i", sfx]
 
+        # --- audio: sound design, optional music, optional voiceover -------------------
+        streams = []                                   # labelled audio streams to mix
+        nxt = audio_idx + 1
+        vo_lines = voice.build_lines(spec, _cues(events, offset), ff, tmp, total)
+        sfx_gain = 0.55 if vo_lines else 1.0           # sit the effects under the voice
+        af = f"[{audio_idx}:a]volume={sfx_gain}[sx]"
+        streams.append("[sx]")
+
         music = sound.pick_music(music_dir) if music_dir else None
         if music:
             inputs += ["-stream_loop", "-1", "-i", music]
-            af = (f"[{audio_idx + 1}:a]volume=0.22,afade=t=out:st={total - 1.5}:d=1.5[m];"
-                  f"[{audio_idx}:a][m]amix=inputs=2:duration=first:normalize=0[pre]")
+            mg = 0.12 if vo_lines else 0.22
+            af += f";[{nxt}:a]volume={mg},afade=t=out:st={total - 1.5}:d=1.5[mu]"
+            streams.append("[mu]")
+            nxt += 1
             log.info("Mixing music: %s", os.path.basename(music))
+
+        for i, ln in enumerate(vo_lines):
+            inputs += ["-i", ln["path"]]
+            ms = int(ln["start"] * 1000)
+            af += f";[{nxt}:a]atempo={ln['tempo']:.3f},adelay={ms}|{ms},volume=1.0[vo{i}]"
+            streams.append(f"[vo{i}]")
+            nxt += 1
+
+        if len(streams) > 1:
+            # amix divides by the input count; multiply back (works on old ffmpeg, no normalize option)
+            af += (f";{''.join(streams)}amix=inputs={len(streams)}:duration=first:dropout_transition=0,"
+                   f"volume={len(streams)}[pre]")
         else:
-            af = f"[{audio_idx}:a]anull[pre]"
+            af += ";[sx]anull[pre]"
         # social-media loudness; explicit format so older ffmpeg builds (Render's) can negotiate it
         af += (";[pre]aformat=sample_fmts=fltp:channel_layouts=stereo,loudnorm=I=-14:TP=-1.5:LRA=11,"
                "aresample=44100,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a]")

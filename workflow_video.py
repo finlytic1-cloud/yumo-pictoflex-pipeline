@@ -42,6 +42,34 @@ CARD_LINE = (42, 42, 66)
 
 KIND_COLOUR = {"trigger": PURPLE, "ai": (120, 170, 255), "action": PURPLE, "outcome": GREEN}
 
+# Visual themes. Each video gets one (chosen in stage1), so the feed doesn't look the same every day.
+#   accent = main colour, ai = AI steps, outcome = results, connector = "curve" or "circuit"
+THEMES = {
+    "violet":  {"bg": (7, 7, 13), "accent": (150, 100, 255), "ai": (120, 170, 255), "outcome": (60, 225, 150),
+                "dot": (24, 24, 38), "haze": (34, 18, 70), "card": (17, 17, 29), "line": (42, 42, 66),
+                "radius": 30, "connector": "curve"},
+    "circuit": {"bg": (3, 9, 13), "accent": (40, 200, 255), "ai": (110, 255, 210), "outcome": (180, 255, 90),
+                "dot": (14, 34, 44), "haze": (6, 40, 60), "card": (8, 20, 28), "line": (24, 56, 70),
+                "radius": 10, "connector": "circuit"},
+    "ember":   {"bg": (11, 8, 6), "accent": (255, 170, 70), "ai": (255, 115, 90), "outcome": (255, 220, 150),
+                "dot": (36, 26, 18), "haze": (60, 30, 10), "card": (24, 17, 12), "line": (66, 48, 34),
+                "radius": 22, "connector": "curve"},
+    "aqua":    {"bg": (4, 11, 15), "accent": (40, 225, 200), "ai": (130, 150, 255), "outcome": (255, 110, 170),
+                "dot": (16, 34, 40), "haze": (8, 48, 56), "card": (10, 22, 28), "line": (30, 60, 66),
+                "radius": 40, "connector": "circuit"},
+}
+THEME = dict(THEMES["violet"])
+
+
+def apply_theme(name: str) -> None:
+    """Swap the module's colours for a theme (they're read at draw time)."""
+    global BG, PURPLE, PURPLE_DIM, GREEN, CARD, CARD_LINE, KIND_COLOUR, THEME
+    THEME = dict(THEMES.get(name, THEMES["violet"]))
+    BG, PURPLE, GREEN = THEME["bg"], THEME["accent"], THEME["outcome"]
+    PURPLE_DIM = tuple(int(c * 0.35) for c in PURPLE)
+    CARD, CARD_LINE = THEME["card"], THEME["line"]
+    KIND_COLOUR = {"trigger": PURPLE, "ai": THEME["ai"], "action": PURPLE, "outcome": GREEN}
+
 # ---------------------------------------------------------------- utils
 
 
@@ -75,6 +103,9 @@ class SDraw:
 
     def polygon(self, xy, fill=None):
         self.d.polygon(self._xy(xy), fill=fill)
+
+    def arc(self, xy, start, end, fill=None, width=1):
+        self.d.arc(self._xy(xy), start, end, fill=fill, width=max(1, int(width * self.k)))
 
     def text(self, xy, text, font=None, fill=None):
         self.d.text((xy[0] * self.k, xy[1] * self.k), text, font=font, fill=fill)
@@ -142,6 +173,26 @@ def bezier(p0, p3, n=48):
     return pts
 
 
+def circuit(p0, p3, n=48):
+    """Right-angled path (down, across, down) sampled evenly, like a circuit trace."""
+    (x0, y0), (x3, y3) = p0, p3
+    ym = (y0 + y3) / 2
+    corners = [(x0, y0), (x0, ym), (x3, ym), (x3, y3)]
+    lens = [math.dist(corners[i], corners[i + 1]) for i in range(3)]
+    total = sum(lens) or 1.0
+    pts = []
+    for i in range(n + 1):
+        d = total * i / n
+        for j in range(3):
+            if d <= lens[j] or j == 2:
+                f = 0 if lens[j] == 0 else min(1.0, d / lens[j])
+                a, b = corners[j], corners[j + 1]
+                pts.append((lerp(a[0], b[0], f), lerp(a[1], b[1], f)))
+                break
+            d -= lens[j]
+    return pts
+
+
 def point_on(pts, f):
     f = clamp(f) * (len(pts) - 1)
     i = int(f)
@@ -182,9 +233,12 @@ def layout(spec):
     rows = {}
     for n in spec["nodes"]:
         rows.setdefault(n["row"], []).append(n)
+    zigzag = spec.get("layout") == "zigzag"
     pos = {}
     for r, items in rows.items():
         xs, w = COLS[len(items)]
+        if zigzag and len(items) == 1:      # single steps snake left and right
+            xs, w = [[400, 680][r % 2]], 560
         for n, x in zip(items, xs):
             pos[n["id"]] = (x, ROW_Y0 + r * ROW_GAP, w)
     n_rows = max(rows) + 1
@@ -215,10 +269,15 @@ def make_background():
     d = SDraw(img)
     for y in range(0, H, 44):
         for x in range(0, W, 44):
-            d.ellipse((x - 1.4, y - 1.4, x + 1.4, y + 1.4), fill=(24, 24, 38))
+            d.ellipse((x - 1.4, y - 1.4, x + 1.4, y + 1.4), fill=THEME["dot"])
+    if THEME["connector"] == "circuit":   # faint grid lines for the circuit-board look
+        for y in range(0, H, 176):
+            d.line([(0, y), (W, y)], fill=THEME["dot"], width=1)
+        for x in range(0, W, 176):
+            d.line([(x, 0), (x, H)], fill=THEME["dot"], width=1)
     glow = Image.new("RGB", (W // 8, H // 8), (0, 0, 0))
     gd = ImageDraw.Draw(glow)
-    gd.ellipse((W / 8 * 0.05, H / 8 * 0.25, W / 8 * 0.95, H / 8 * 0.8), fill=(34, 18, 70))
+    gd.ellipse((W / 8 * 0.05, H / 8 * 0.25, W / 8 * 0.95, H / 8 * 0.8), fill=THEME["haze"])
     glow = glow.filter(ImageFilter.GaussianBlur(16)).resize((RW, RH), Image.BILINEAR)
     arr = np.asarray(img, dtype=np.int16) + np.asarray(glow, dtype=np.int16)
     return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8)).convert("RGBA")
@@ -247,7 +306,15 @@ def camera(tl, n_rows, world_h, t):
     z = ease_in_out((t - tl.zoom_start) / tl.zoom_len)
     fit = min(1.0, (H - 520) / (world_h - ROW_Y0 + 120))
     cy_fit = (ROW_Y0 - 60 + world_h) / 2
-    return 540, lerp(cy_follow, cy_fit + 90 / max(fit, 0.01) * 0, z), lerp(1.0, fit, z)
+    cx_follow = 540 + CAMERA_SWAY(follow_row)
+    return lerp(cx_follow, 540, z), lerp(cy_follow, cy_fit, z), lerp(1.0, fit, z)
+
+
+def _no_sway(_row):
+    return 0.0
+
+
+CAMERA_SWAY = _no_sway
 
 
 def to_screen(cam, x, y):
@@ -272,7 +339,7 @@ def draw_workflow(frame, spec, pos, tl, cam, t):
         bx, by, _ = pos[b]
         p0 = to_screen(cam, ax, ay + NODE_H / 2)
         p3 = to_screen(cam, bx, by - NODE_H / 2)
-        pts = bezier(p0, p3)
+        pts = circuit(p0, p3) if THEME["connector"] == "circuit" else bezier(p0, p3)
         start = tl.row_t(rows[a]) + 0.35
         end = tl.row_t(rows[b]) - 0.05
         grow = ease_in_out((t - start) / max(0.1, end - start))
@@ -283,6 +350,10 @@ def draw_workflow(frame, spec, pos, tl, cam, t):
         seg = pts[:cut]
         lw = max(2, int(4 * s))
         d.line(seg, fill=rgba(mix(CARD_LINE, col, 0.75), 1), width=lw, joint="curve")
+        if THEME["connector"] == "circuit" and grow >= 1:   # solder dots at the corners
+            for cxp, cyp in (pts[0], pts[-1]):
+                d.rounded_rectangle((cxp - 6 * s, cyp - 6 * s, cxp + 6 * s, cyp + 6 * s), radius=2 * s,
+                                    fill=rgba(col, 1))
         g.line(seg, fill=rgba(col, 0.9), width=max(4, int(12 * s)), joint="curve")
         if grow < 1:  # bright head while drawing
             hx, hy = seg[-1]
@@ -299,6 +370,9 @@ def draw_workflow(frame, spec, pos, tl, cam, t):
 
     # nodes
     pulse_all = clamp(1 - abs(t - (tl.zoom_start + tl.zoom_len + 0.15)) / 0.45)
+    incoming = {}
+    for _, b in spec["edges"]:
+        incoming[b] = incoming.get(b, 0) + 1
     for n in spec["nodes"]:
         x, y, w = pos[n["id"]]
         t0 = tl.row_t(n["row"])
@@ -312,21 +386,39 @@ def draw_workflow(frame, spec, pos, tl, cam, t):
         hw, hh = w / 2 * sc, NODE_H / 2 * sc
         a = clamp(appear)
         box = (cx - hw, cy - hh, cx + hw, cy + hh)
-        rad = 30 * sc
+        rad = THEME["radius"] * sc
         d.rounded_rectangle(box, radius=rad, fill=rgba(CARD, a), outline=rgba(mix(CARD_LINE, col, lit), a),
                             width=max(2, int(3 * s)))
         g.rounded_rectangle(box, radius=rad, outline=rgba(col, lit * (0.55 + 0.45 * pulse_all)),
                             width=max(4, int(16 * s)))
         # activation ripple
-        rp = (t - t0) / 0.7
+        merge = incoming.get(n["id"], 0) >= 2
+        rp = (t - t0) / (0.9 if merge else 0.7)
         if 0 < rp < 1:
-            grow = 26 * ease_out(rp) * s
+            grow = (70 if merge else 26) * ease_out(rp) * s
             d.rounded_rectangle((box[0] - grow, box[1] - grow, box[2] + grow, box[3] + grow),
                                 radius=rad + grow, outline=rgba(col, (1 - rp) * 0.8), width=max(2, int(3 * s)))
         # icon bubble
         r = 36 * sc
         bx, by = box[0] + 28 * sc + r, cy
+        # charging ring sweeps round just before the step fires
+        charge = clamp((t - (t0 - 0.35)) / 0.35)
+        if 0 < charge < 1:
+            rr = r + 9 * sc
+            d.arc((bx - rr, by - rr, bx + rr, by + rr), -90, -90 + 360 * charge, fill=rgba(col, a),
+                  width=max(2, int(4 * s)))
         d.ellipse((bx - r, by - r, bx + r, by + r), fill=rgba(mix(PURPLE_DIM, col, lit), a))
+        # outcomes burst into sparks when they land
+        if n.get("kind") == "outcome":
+            bp = (t - t0) / 0.9
+            if 0 < bp < 1:
+                for k in range(16):
+                    ang = k * math.pi / 8 + (n["row"] * 0.4)
+                    dist = (r + 90 * ease_out(bp)) * (0.8 + 0.4 * ((k * 37) % 7) / 7)
+                    px, py = bx + math.cos(ang) * dist, by + math.sin(ang) * dist
+                    pr = (6 * (1 - bp) + 1.5) * sc
+                    g.ellipse((px - pr * 2, py - pr * 2, px + pr * 2, py + pr * 2), fill=rgba(col, 1 - bp))
+                    d.ellipse((px - pr, py - pr, px + pr, py + pr), fill=rgba(INK, (1 - bp) * a))
         glyph(d, n.get("kind", "action"), bx, by, r * 0.55, rgba(BG if lit > 0.5 else INK, a))
         # text
         tx = bx + r + 22 * sc
@@ -335,6 +427,14 @@ def draw_workflow(frame, spec, pos, tl, cam, t):
         fs = font("Inter-Regular.otf", (28 if w >= 500 else 24 if w >= 400 else 22) * sc)
         label = n["label"]
         lines = wrap(d, label, fl, max_w)[:2]
+        # typewriter: the label types itself out as the step fires (layout stays fixed)
+        shown = int(len(label) * clamp((t - t0 + 0.05) / 0.4)) if t < t0 + 0.4 else len(label)
+        if shown < len(label):
+            left, out = shown, []
+            for ln in lines:
+                out.append(ln[:max(0, left)])
+                left -= len(ln) + 1
+            lines = out
         sub = n.get("sub", "")
         line_h = fl.size / K * 1.15
         block = line_h * len(lines) + (fs.size / K * 1.25 if sub else 0)
@@ -504,8 +604,22 @@ def render_frames(spec: dict, frames_dir: str) -> float:
     assemble.py runs this in a separate process and encodes afterwards, so the
     drawing memory is fully released before ffmpeg starts (Render's cron plan has 512MB).
     """
+    global CAMERA_SWAY
+    apply_theme(spec.get("theme", "violet"))
     pos, n_rows, world_h = layout(spec)
     tl = TL(n_rows)
+    # the camera drifts sideways to follow a zigzag flow
+    row_x = {}
+    for n in spec["nodes"]:
+        row_x.setdefault(n["row"], []).append(pos[n["id"]][0])
+    xs = [sum(v) / len(v) - 540 for _, v in sorted(row_x.items())]
+
+    def sway(fr):
+        i = int(fr)
+        j = min(i + 1, len(xs) - 1)
+        return lerp(xs[i], xs[j], ease_in_out(fr - i)) * 0.3
+
+    CAMERA_SWAY = sway
     bg, fades = make_background(), make_fades()
     for f in range(int(tl.total * FPS)):
         img = render_frame(bg, fades, spec, pos, n_rows, world_h, tl, f / FPS)

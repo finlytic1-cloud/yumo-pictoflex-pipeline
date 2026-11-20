@@ -131,6 +131,12 @@ def validate_spec(spec: dict) -> dict:
     if not any(n.get("value") for n in nodes):
         spec.pop("counter_label", None)
     spec["tag"] = "Example automation"
+    vo = spec.get("voiceover") if isinstance(spec.get("voiceover"), dict) else {}
+    spec["voiceover"] = {k: _cut(vo.get(k), 120) for k in ("hook", "build", "reveal", "results", "cta") if vo.get(k)}
+    # a different look each day: colour theme + layout
+    import workflow_video
+    spec["theme"] = random.choice(list(workflow_video.THEMES))
+    spec["layout"] = random.choice(["stack", "zigzag"])
     return spec
 
 
@@ -170,6 +176,7 @@ def make_spec() -> tuple[dict, float]:
         score, notes = qc(spec)
         log.info("QC score after rewrite %.0f - %s", score, notes)
     spec["industry"] = industry
+    log.info("Look: %s theme, %s layout", spec["theme"], spec["layout"])
     return spec, score
 
 

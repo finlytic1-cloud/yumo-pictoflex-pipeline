@@ -66,6 +66,13 @@ HIGGSFIELD_OPENER_PARAMS = env(
 HIGGSFIELD_MAX_USD_PER_VIDEO = float(env("HIGGSFIELD_MAX_USD_PER_VIDEO", "1.00"))
 
 # ---------------------------------------------------------------------------
+# Voiceover (ElevenLabs). Leave the key empty to post with sound design only.
+# ---------------------------------------------------------------------------
+ELEVENLABS_API_KEY = env("ELEVENLABS_API_KEY", "").strip()
+ELEVENLABS_VOICE_ID = env("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")   # "George": warm British narrator
+ELEVENLABS_MODEL = env("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+
+# ---------------------------------------------------------------------------
 # Post for Me
 # ---------------------------------------------------------------------------
 POSTFORME_API_KEY = env("POSTFORME_API_KEY", required=True)
@@ -136,9 +143,17 @@ Return ONLY valid JSON, no markdown, in exactly this shape:
  "cta": "max 70 chars, FOMO + free audit, link in bio, no url",
  "caption": "ONE sentence, max 20 words, no hashtags, no url",
  "hashtags": "3-5 hashtags",
- "opener_prompt": "A 4-second cinematic vertical shot that sets the scene before the workflow: the {industry}'s world at the moment the trigger happens (e.g. a phone lighting up on an empty reception desk at night). Moody, premium, shallow depth of field, slow camera move. No text, no logos, no readable screens."
+ "opener_prompt": "A 4-second cinematic vertical shot that sets the mood for the hook, inside the {industry}'s own world. Pick ONE striking, specific, unexpected image (e.g. rain streaking down a dark shopfront window, a single desk lamp left on in an empty office, steam rising off a coffee in a quiet kitchen at dawn, keys swinging on a hook). Moody, premium, shallow depth of field, slow camera move. NEVER show phones, laptops, screens, devices, people's faces, text or logos.",
+ "voiceover": {{
+   "hook": "spoken over the opening, max 10 words, matches the hook",
+   "build": "spoken while the workflow builds, max 16 words, what the system does",
+   "reveal": "spoken as the whole system is revealed, max 8 words",
+   "results": "spoken over the phone notifications, max 12 words",
+   "cta": "spoken on the logo, max 10 words, ends with: link in bio"
+ }}
 }}
-Use 3 or 4 notifications.
+Use 3 or 4 notifications. NEVER use people's names (no "Sarah T." etc.) anywhere - say "a new client", "a buyer".
+Voiceover: calm, confident British narrator, plain English, second person ("you"), no tool names.
 """.strip()
 
 QC_INSTRUCTIONS = """

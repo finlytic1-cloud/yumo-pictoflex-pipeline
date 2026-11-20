@@ -6,6 +6,8 @@
   - `higgsfield.py`: optional 3-second cinematic opener (skipped if keys are missing, it's over budget, or it fails)
   - `workflow_video.py`: the animated workflow (drawn at 3x and shrunk, so it's sharp)
   - `sound.py`: sound design generated to match every on-screen moment, plus an optional music track from `assets/music/`
+  - `voice.py`: optional ElevenLabs voiceover (5 short lines Claude writes, each placed on its moment). Needs `ELEVENLABS_API_KEY`.
+  - Each video gets a random colour theme (violet, circuit, ember, aqua) and layout (stack or zigzag).
 - `stage2_publish.py` (daily, 10:00 UTC): posts the Reel to every Pictoflex account through Post for Me (Instagram and Facebook as Reels).
 - `stage3_analytics.py`: unchanged.
 - `fonts/`: Inter (SIL Open Font License, see LICENSE-Inter.txt).
