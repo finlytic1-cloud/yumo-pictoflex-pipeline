@@ -76,8 +76,8 @@ VOICEFINDER_VOICE_ID = env("VOICEFINDER_VOICE_ID", "").strip()   # empty = auto-
 # "animated" = the workflow is drawn in code (free).
 # ---------------------------------------------------------------------------
 VIDEO_MODE = env("VIDEO_MODE", "cinematic")
-HIGGSFIELD_VIDEO_MODEL = env("HIGGSFIELD_VIDEO_MODEL", "bytedance/seedance-2.5/text-to-video")
-HIGGSFIELD_VIDEO_PARAMS = env("HIGGSFIELD_VIDEO_PARAMS", '{"aspect_ratio": "9:16", "resolution": "720p", "generate_audio": false}')
+HIGGSFIELD_VIDEO_MODEL = env("HIGGSFIELD_VIDEO_MODEL", "kling-video/v3.0-turbo/text-to-video")
+HIGGSFIELD_VIDEO_PARAMS = env("HIGGSFIELD_VIDEO_PARAMS", '{"aspect_ratio": "9:16", "resolution": "1080p"}')
 
 # ---------------------------------------------------------------------------
 # Post for Me
