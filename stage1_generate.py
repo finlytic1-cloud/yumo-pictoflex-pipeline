@@ -207,24 +207,53 @@ def upload_to_supabase(file_path: str, data: bytes, content_type: str) -> str:
 # Footage library (clips made in the Higgsfield app with your plan's credits)
 # ---------------------------------------------------------------------------
 
-def pick_library_clip(theme: str | None) -> str | None:
-    """Pick a clip from assets/clips/, preferring ones named after today's theme
-    (e.g. violet_01.mp4) and the one used longest ago."""
-    folder = config.CLIP_DIR
+def _library() -> dict:
+    """name -> local path or URL. Clips can be MP4 files in assets/clips/, or lines in
+    assets/clips/clips.txt of the form "violet_01 https://...mp4" (e.g. Higgsfield result links)."""
+    folder, out = config.CLIP_DIR, {}
     if not os.path.isdir(folder):
+        return out
+    for f in sorted(os.listdir(folder)):
+        if f.lower().endswith((".mp4", ".mov")):
+            out[f] = os.path.join(folder, f)
+    listing = os.path.join(folder, "clips.txt")
+    if os.path.exists(listing):
+        with open(listing, encoding="utf-8") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) >= 2 and not line.lstrip().startswith("#") and parts[1].startswith("http"):
+                    out[parts[0]] = parts[1]
+    return out
+
+
+def pick_library_clip(theme: str | None, tmp: str) -> tuple[str, str] | None:
+    """Pick a clip, preferring ones named after today's theme (e.g. violet_01) and the
+    one used longest ago. Returns (local path, name), downloading it first if it's a link."""
+    lib = _library()
+    if not lib:
         return None
-    clips = sorted(f for f in os.listdir(folder) if f.lower().endswith((".mp4", ".mov")))
-    if not clips:
-        return None
-    themed = [c for c in clips if theme and c.lower().startswith(theme.lower())]
-    pool = themed or clips
+    themed = [c for c in lib if theme and c.lower().startswith(theme.lower())]
+    pool = themed or sorted(lib)
     used = db.fetch_all(
         "SELECT visual_spec->>'clip' AS clip, max(created_at) AS last FROM content_items "
         "WHERE brand = %s AND visual_spec ? 'clip' GROUP BY 1;", (BRAND,))
     last = {r["clip"]: r["last"] for r in used}
-    choice = min(pool, key=lambda c: (last.get(c) is not None, last.get(c) or 0))
-    log.info("Using library clip %s", choice)
-    return os.path.join(folder, choice)
+    for name in sorted(pool, key=lambda c: (last.get(c) is not None, last.get(c) or 0)):
+        src = lib[name]
+        if not src.startswith("http"):
+            log.info("Using library clip %s", name)
+            return src, name
+        try:
+            resp = requests.get(src, timeout=120)
+            resp.raise_for_status()
+            path = os.path.join(tmp, "library_clip.mp4")
+            with open(path, "wb") as fh:
+                fh.write(resp.content)
+            log.info("Using library clip %s (downloaded)", name)
+            return path, name
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not download clip %s: %s", name, exc)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +280,14 @@ def main() -> None:
             out = os.path.join(tmp, "reel.mp4")
             clip = None
             if config.VIDEO_MODE == "cinematic":
-                clip = pick_library_clip(spec.get("theme"))          # clips you made with Higgsfield credits
+                picked = pick_library_clip(spec.get("theme"), tmp)   # clips made with Higgsfield credits
+                if picked:
+                    clip, spec["clip"] = picked
+                    prefix = spec["clip"].split("_")[0].lower()
+                    import workflow_video
+                    if prefix in workflow_video.THEMES:      # words + colours match the footage
+                        spec["theme"] = prefix
+                    db.execute("UPDATE content_items SET visual_spec = %s WHERE id = %s;", (json.dumps(spec), item_id))
                 if not clip and config.CLIP_SOURCE == "api" and spec.get("cinematic_prompt"):
                     import cinematic
                     try:
@@ -261,9 +297,6 @@ def main() -> None:
                     except Exception as exc:  # noqa: BLE001
                         log.warning("Higgsfield clip failed, falling back to the animated version: %s", exc)
             if clip:
-                if clip.startswith(config.CLIP_DIR):
-                    spec["clip"] = os.path.basename(clip)
-                    db.execute("UPDATE content_items SET visual_spec = %s WHERE id = %s;", (json.dumps(spec), item_id))
                 assemble.build_cinematic(spec, clip, out, music_dir=config.MUSIC_DIR)
             else:
                 assemble.build_reel(spec, out, music_dir=config.MUSIC_DIR)
