@@ -76,6 +76,12 @@ VOICEFINDER_VOICE_ID = env("VOICEFINDER_VOICE_ID", "").strip()   # empty = auto-
 # "animated" = the workflow is drawn in code (free).
 # ---------------------------------------------------------------------------
 VIDEO_MODE = env("VIDEO_MODE", "cinematic")
+# Where the cinematic footage comes from:
+#   "library" (default) = clips you made in the Higgsfield app with your plan's credits, saved in assets/clips/
+#   "api"               = also generate a fresh clip through the Higgsfield API (paid from the API balance) when
+#                         the library is empty
+CLIP_SOURCE = env("CLIP_SOURCE", "library")
+CLIP_DIR = env("CLIP_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "clips"))
 HIGGSFIELD_VIDEO_MODEL = env("HIGGSFIELD_VIDEO_MODEL", "kling-video/v3.0-turbo/text-to-video")
 HIGGSFIELD_VIDEO_PARAMS = env("HIGGSFIELD_VIDEO_PARAMS", '{"aspect_ratio": "9:16", "resolution": "1080p"}')
 

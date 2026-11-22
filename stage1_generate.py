@@ -204,6 +204,30 @@ def upload_to_supabase(file_path: str, data: bytes, content_type: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Footage library (clips made in the Higgsfield app with your plan's credits)
+# ---------------------------------------------------------------------------
+
+def pick_library_clip(theme: str | None) -> str | None:
+    """Pick a clip from assets/clips/, preferring ones named after today's theme
+    (e.g. violet_01.mp4) and the one used longest ago."""
+    folder = config.CLIP_DIR
+    if not os.path.isdir(folder):
+        return None
+    clips = sorted(f for f in os.listdir(folder) if f.lower().endswith((".mp4", ".mov")))
+    if not clips:
+        return None
+    themed = [c for c in clips if theme and c.lower().startswith(theme.lower())]
+    pool = themed or clips
+    used = db.fetch_all(
+        "SELECT visual_spec->>'clip' AS clip, max(created_at) AS last FROM content_items "
+        "WHERE brand = %s AND visual_spec ? 'clip' GROUP BY 1;", (BRAND,))
+    last = {r["clip"]: r["last"] for r in used}
+    choice = min(pool, key=lambda c: (last.get(c) is not None, last.get(c) or 0))
+    log.info("Using library clip %s", choice)
+    return os.path.join(folder, choice)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -226,14 +250,20 @@ def main() -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "reel.mp4")
             clip = None
-            if config.VIDEO_MODE == "cinematic" and spec.get("cinematic_prompt"):
-                import cinematic
-                try:
-                    clip = higgsfield.generate_workflow_clip(cinematic.video_prompt(spec), cinematic.clip_seconds(spec),
-                                                             os.path.join(tmp, "workflow.mp4"))
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("Higgsfield clip failed, falling back to the animated version: %s", exc)
+            if config.VIDEO_MODE == "cinematic":
+                clip = pick_library_clip(spec.get("theme"))          # clips you made with Higgsfield credits
+                if not clip and config.CLIP_SOURCE == "api" and spec.get("cinematic_prompt"):
+                    import cinematic
+                    try:
+                        clip = higgsfield.generate_workflow_clip(cinematic.video_prompt(spec),
+                                                                 cinematic.clip_seconds(spec),
+                                                                 os.path.join(tmp, "workflow.mp4"))
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("Higgsfield clip failed, falling back to the animated version: %s", exc)
             if clip:
+                if clip.startswith(config.CLIP_DIR):
+                    spec["clip"] = os.path.basename(clip)
+                    db.execute("UPDATE content_items SET visual_spec = %s WHERE id = %s;", (json.dumps(spec), item_id))
                 assemble.build_cinematic(spec, clip, out, music_dir=config.MUSIC_DIR)
             else:
                 assemble.build_reel(spec, out, music_dir=config.MUSIC_DIR)

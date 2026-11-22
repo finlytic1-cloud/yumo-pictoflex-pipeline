@@ -154,11 +154,12 @@ def build_cinematic(spec: dict, clip_path: str, out_path: str, music_dir: str | 
         sfx = os.path.join(tmp, "sfx.wav")
         sound.build_track(events, sfx, total=total)
 
-        hold = max(0.0, total - tl["clip"]) + 1.0
         vf = (f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setsar=1,"
-              f"tpad=stop_mode=clone:stop_duration={hold:.2f},trim=0:{total:.2f},setpts=PTS-STARTPTS[c];"
+              f"trim=0:{total:.2f},setpts=PTS-STARTPTS[c];"
               "[c][1:v]overlay=0:0,format=yuv420p[v]")
-        inputs = ["-threads", "1", "-i", clip_path, "-framerate", str(workflow_video.FPS), "-i", os.path.join(frames, "o%05d.png"),
+        # the clip loops if it's shorter than the video
+        inputs = ["-threads", "1", "-stream_loop", "-1", "-i", clip_path,
+                  "-framerate", str(workflow_video.FPS), "-i", os.path.join(frames, "o%05d.png"),
                   "-i", sfx]
         cues = {"hook": 0.3, "build": events["pops"][0][0] if events["pops"] else 2.6,
                 "reveal": tl["clip"] * 0.72, "results": tl["notif"] + 0.35, "cta": tl["end"] + 0.2}
