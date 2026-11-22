@@ -75,7 +75,12 @@ VOICEFINDER_VOICE_ID = env("VOICEFINDER_VOICE_ID", "").strip()   # empty = auto-
 # Video: "cinematic" = Higgsfield makes the workflow footage (falls back to "animated" if it fails),
 # "animated" = the workflow is drawn in code (free).
 # ---------------------------------------------------------------------------
-VIDEO_MODE = env("VIDEO_MODE", "cinematic")
+# "higgsfield_full" = complete videos made in the Higgsfield app, queued in assets/videos/queue.json
+#                    (code only adds the voiceover and, if END_CARD is on, a logo card at the end)
+# "cinematic"       = Higgsfield footage with the words/cards drawn on top in code
+# "animated"        = everything drawn in code (free)
+VIDEO_MODE = env("VIDEO_MODE", "higgsfield_full")
+END_CARD = env("END_CARD", "true").lower() in ("1", "true", "yes", "on")
 # Where the cinematic footage comes from:
 #   "library" (default) = clips you made in the Higgsfield app with your plan's credits, saved in assets/clips/
 #   "api"               = also generate a fresh clip through the Higgsfield API (paid from the API balance) when

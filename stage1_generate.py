@@ -260,7 +260,48 @@ def pick_library_clip(theme: str | None, tmp: str) -> tuple[str, str] | None:
 # Main
 # ---------------------------------------------------------------------------
 
+def main_full_video() -> None:
+    """VIDEO_MODE=higgsfield_full: post the next complete video made in the Higgsfield app."""
+    import full_video
+    item = full_video.next_video()
+    if not item:
+        log.warning("No unused videos left in assets/videos/queue.json - nothing to post today.")
+        return
+    log.info("Today's video: %s", item["name"])
+    row = db.execute(
+        """
+        INSERT INTO content_items
+            (brand, content_pillar, objective, hook, platform_target, caption, cta, hashtags,
+             visual_spec, status, attempt_number)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'approved', 1) RETURNING id;
+        """,
+        (BRAND, item.get("industry"), "higgsfield_video", item.get("hook"), "instagram,tiktok,facebook,linkedin",
+         _cut(item.get("caption"), 160), item.get("cta"), item.get("hashtags"),
+         json.dumps({"video": item["name"], "url": item["url"]})),
+        returning=True,
+    )
+    item_id = row["id"]
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "reel.mp4")
+            full_video.build(item, out)
+            with open(out, "rb") as fh:
+                data = fh.read()
+            url = upload_to_supabase(f"{BRAND}/{item_id}/reel.mp4", data, "video/mp4")
+        db.execute("UPDATE content_items SET status = 'rendered', image_urls = %s WHERE id = %s;",
+                   (json.dumps([url]), item_id))
+        log.info("Reel %d ready: %s", item_id, url)
+    except Exception as exc:  # noqa: BLE001
+        log.error("Building video %s failed: %s", item["name"], exc)
+        db.execute("UPDATE content_items SET status = 'failed', error_message = %s WHERE id = %s;",
+                   (str(exc)[:2000], item_id))
+        raise
+
+
 def main() -> None:
+    if config.VIDEO_MODE == "higgsfield_full":
+        main_full_video()
+        return
     spec, score = make_spec()
     row = db.execute(
         """
