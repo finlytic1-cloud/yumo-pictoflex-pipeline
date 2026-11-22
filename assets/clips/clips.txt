@@ -1,0 +1,3 @@
+# Clips made in the Higgsfield app (plan credits). One per line: name  link
+# Name them after the colour theme they suit (violet, circuit, ember, aqua) so they're used on that theme's days.
+violet_01 https://d8j0ntlcm91z4.cloudfront.net/user_3HcZ0s2TS8Baxub3FXbgpaitmwj/hf_20261122_184945_cb746ec0-fa42-411b-9d86-b4ad3d41d4dd.mp4
