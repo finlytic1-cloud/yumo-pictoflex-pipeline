@@ -1,5 +1,5 @@
 """
-Voiceover via ElevenLabs text-to-speech.
+Voiceover via VoiceFinder text-to-speech (https://voicefinder.io, API docs in the app's Developers page).
 
 Claude writes five short lines (hook, build, reveal, results, cta). Each line is
 spoken once and placed on the timeline at its moment in the video. If the key
@@ -17,21 +17,58 @@ from utils import log
 ORDER = ["hook", "build", "reveal", "results", "cta"]
 
 
+BASE = "https://api.voicefinder.io/v1"
+DEFAULT_VOICE = "f6abdab0-2524-43d1-92e2-b39486f39fbe"   # VoiceFinder's sample voice, used if nothing better is found
+_voice_cache: dict = {}
+
+
 def enabled() -> bool:
-    return bool(config.ELEVENLABS_API_KEY)
+    return bool(config.VOICEFINDER_API_KEY)
+
+
+def _headers() -> dict:
+    return {"x-api-key": config.VOICEFINDER_API_KEY, "Content-Type": "application/json"}
+
+
+def _pick_voice() -> str:
+    """Use VOICEFINDER_VOICE_ID if set; otherwise pick a British male voice from the catalogue."""
+    if config.VOICEFINDER_VOICE_ID:
+        return config.VOICEFINDER_VOICE_ID
+    if "id" in _voice_cache:
+        return _voice_cache["id"]
+    chosen = DEFAULT_VOICE
+    try:
+        resp = requests.get(f"{BASE}/voices", headers=_headers(), timeout=30)
+        voices = resp.json().get("voices", []) if resp.status_code == 200 else []
+        def score(v):
+            blob = str(v).lower()
+            s = 0
+            s += 3 if any(w in blob for w in ("british", "united kingdom", "en-gb", "uk english", "london")) else 0
+            s += 2 if (" male" in blob or "'male'" in blob or '"male"' in blob) and "female" not in blob else 0
+            s += 1 if any(w in blob for w in ("narrat", "commercial", "advert", "corporate", "warm")) else 0
+            return s
+        if voices:
+            best = max(voices, key=score)
+            if score(best) >= 3:
+                chosen = best.get("voice_id", chosen)
+                log.info("Voiceover voice: %s (%s)", best.get("name"), chosen)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not list VoiceFinder voices, using the default: %s", exc)
+    _voice_cache["id"] = chosen
+    return chosen
 
 
 def _tts(text: str, out_path: str) -> str | None:
     resp = requests.post(
-        f"https://api.elevenlabs.io/v1/text-to-speech/{config.ELEVENLABS_VOICE_ID}",
-        params={"output_format": "mp3_44100_128"},
-        headers={"xi-api-key": config.ELEVENLABS_API_KEY, "Content-Type": "application/json"},
-        json={"text": text, "model_id": config.ELEVENLABS_MODEL,
-              "voice_settings": {"stability": 0.45, "similarity_boost": 0.8, "style": 0.25}},
-        timeout=60,
+        f"{BASE}/text-to-speech/{_pick_voice()}",
+        headers=_headers(),
+        json={"text": text, "language": "en", "output_format": "mp3",
+              "instruct": "confident, warm British advert narrator",
+              "voice_settings": {"speed": 1.05}, "tail_pad_s": 0.1},
+        timeout=300,
     )
     if resp.status_code != 200:
-        log.error("ElevenLabs %s: %s", resp.status_code, resp.text[:400])
+        log.error("VoiceFinder %s: %s", resp.status_code, resp.text[:400])
         return None
     with open(out_path, "wb") as fh:
         fh.write(resp.content)
@@ -49,7 +86,7 @@ def build_lines(spec: dict, cues: dict, ff: str, tmp: str, total: float) -> list
     vo = spec.get("voiceover") or {}
     if not enabled() or not vo:
         if vo and not enabled():
-            log.info("ELEVENLABS_API_KEY not set - no voiceover.")
+            log.info("VOICEFINDER_API_KEY not set - no voiceover.")
         return []
     lines, prev_end = [], 0.0
     keys = [k for k in ORDER if (vo.get(k) or "").strip()]

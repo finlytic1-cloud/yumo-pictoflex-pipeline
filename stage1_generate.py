@@ -224,20 +224,25 @@ def main() -> None:
     item_id = row["id"]
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            opener = None
-            if spec.get("opener_prompt"):
-                try:
-                    opener = higgsfield.generate_opener(spec["opener_prompt"], os.path.join(tmp, "opener.mp4"))
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("Opener failed, continuing without it: %s", exc)
             out = os.path.join(tmp, "reel.mp4")
-            assemble.build_reel(spec, out, opener_path=opener, music_dir=config.MUSIC_DIR)
+            clip = None
+            if config.VIDEO_MODE == "cinematic" and spec.get("cinematic_prompt"):
+                import cinematic
+                try:
+                    clip = higgsfield.generate_workflow_clip(cinematic.video_prompt(spec), cinematic.clip_seconds(spec),
+                                                             os.path.join(tmp, "workflow.mp4"))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Higgsfield clip failed, falling back to the animated version: %s", exc)
+            if clip:
+                assemble.build_cinematic(spec, clip, out, music_dir=config.MUSIC_DIR)
+            else:
+                assemble.build_reel(spec, out, music_dir=config.MUSIC_DIR)
             with open(out, "rb") as fh:
                 data = fh.read()
             url = upload_to_supabase(f"{BRAND}/{item_id}/reel.mp4", data, "video/mp4")
         db.execute("UPDATE content_items SET status = 'rendered', image_urls = %s WHERE id = %s;",
                    (json.dumps([url]), item_id))
-        log.info("Reel %d ready (%d KB, opener: %s): %s", item_id, len(data) // 1024, bool(opener), url)
+        log.info("Reel %d ready (%d KB, cinematic: %s): %s", item_id, len(data) // 1024, bool(clip), url)
     except Exception as exc:  # noqa: BLE001
         log.error("Rendering failed for content_item %d: %s", item_id, exc)
         db.execute("UPDATE content_items SET status = 'failed', error_message = %s WHERE id = %s;",

@@ -63,14 +63,21 @@ HIGGSFIELD_OPENER_PARAMS = env(
     '{"duration": 4, "aspect_ratio": "9:16", "resolution": "720p", "generate_audio": false}',
 )
 # Safety cap: skip the opener if Higgsfield's own estimate is above this.
-HIGGSFIELD_MAX_USD_PER_VIDEO = float(env("HIGGSFIELD_MAX_USD_PER_VIDEO", "1.00"))
+HIGGSFIELD_MAX_USD_PER_VIDEO = float(env("HIGGSFIELD_MAX_USD_PER_VIDEO", "4.00"))
 
 # ---------------------------------------------------------------------------
-# Voiceover (ElevenLabs). Leave the key empty to post with sound design only.
+# Voiceover (VoiceFinder). Leave the key empty to post with sound design only.
 # ---------------------------------------------------------------------------
-ELEVENLABS_API_KEY = env("ELEVENLABS_API_KEY", "").strip()
-ELEVENLABS_VOICE_ID = env("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")   # "George": warm British narrator
-ELEVENLABS_MODEL = env("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+VOICEFINDER_API_KEY = env("VOICEFINDER_API_KEY", "").strip()
+VOICEFINDER_VOICE_ID = env("VOICEFINDER_VOICE_ID", "").strip()   # empty = auto-pick a British male voice
+
+# ---------------------------------------------------------------------------
+# Video: "cinematic" = Higgsfield makes the workflow footage (falls back to "animated" if it fails),
+# "animated" = the workflow is drawn in code (free).
+# ---------------------------------------------------------------------------
+VIDEO_MODE = env("VIDEO_MODE", "cinematic")
+HIGGSFIELD_VIDEO_MODEL = env("HIGGSFIELD_VIDEO_MODEL", "bytedance/seedance-2.5/text-to-video")
+HIGGSFIELD_VIDEO_PARAMS = env("HIGGSFIELD_VIDEO_PARAMS", '{"aspect_ratio": "9:16", "resolution": "720p", "generate_audio": false}')
 
 # ---------------------------------------------------------------------------
 # Post for Me
@@ -143,7 +150,7 @@ Return ONLY valid JSON, no markdown, in exactly this shape:
  "cta": "max 70 chars, FOMO + free audit, link in bio, no url",
  "caption": "ONE sentence, max 20 words, no hashtags, no url",
  "hashtags": "3-5 hashtags",
- "opener_prompt": "A 4-second cinematic vertical shot that sets the mood for the hook, inside the {industry}'s own world. Pick ONE striking, specific, unexpected image (e.g. rain streaking down a dark shopfront window, a single desk lamp left on in an empty office, steam rising off a coffee in a quiet kitchen at dawn, keys swinging on a hook). Moody, premium, shallow depth of field, slow camera move. NEVER show phones, laptops, screens, devices, people's faces, text or logos.",
+ "cinematic_prompt": "Story beats (max 90 words) for ONE continuous ~12-second abstract 3D shot that visualises THIS workflow: what lights up first, where light splits into parallel paths (one per branch), where paths merge, and the final payoff burst. Describe light, glass shapes and motion with time markers (0-3s, 3-7s, 7-10s, 10-12s). Abstract only: no text, numbers, people, phones, screens or real objects.",
  "voiceover": {{
    "hook": "spoken over the opening, max 10 words, matches the hook",
    "build": "spoken while the workflow builds, max 16 words, what the system does",

@@ -84,45 +84,83 @@ def build_reel(spec: dict, out_path: str, opener_path: str | None = None,
             audio_idx = 1
         inputs += ["-i", sfx]
 
-        # --- audio: sound design, optional music, optional voiceover -------------------
-        streams = []                                   # labelled audio streams to mix
-        nxt = audio_idx + 1
-        vo_lines = voice.build_lines(spec, _cues(events, offset), ff, tmp, total)
-        sfx_gain = 0.55 if vo_lines else 1.0           # sit the effects under the voice
-        af = f"[{audio_idx}:a]volume={sfx_gain}[sx]"
-        streams.append("[sx]")
+        _mix_and_encode(ff, inputs, vf, audio_idx, spec, _cues(events, offset), total, tmp, music_dir, out_path)
+    return out_path
 
-        music = sound.pick_music(music_dir) if music_dir else None
-        if music:
-            inputs += ["-stream_loop", "-1", "-i", music]
-            mg = 0.12 if vo_lines else 0.22
-            af += f";[{nxt}:a]volume={mg},afade=t=out:st={total - 1.5}:d=1.5[mu]"
-            streams.append("[mu]")
-            nxt += 1
-            log.info("Mixing music: %s", os.path.basename(music))
 
-        for i, ln in enumerate(vo_lines):
-            inputs += ["-i", ln["path"]]
-            ms = int(ln["start"] * 1000)
-            af += f";[{nxt}:a]atempo={ln['tempo']:.3f},adelay={ms}|{ms},volume=1.0[vo{i}]"
-            streams.append(f"[vo{i}]")
-            nxt += 1
+def _mix_and_encode(ff, inputs, vf, audio_idx, spec, cues, total, tmp, music_dir, out_path):
+    """Mix sound design + optional music + optional voiceover, then encode the final MP4."""
+    inputs = list(inputs)
+    # --- audio: sound design, optional music, optional voiceover -------------------
+    streams = []                                   # labelled audio streams to mix
+    nxt = audio_idx + 1
+    vo_lines = voice.build_lines(spec, cues, ff, tmp, total)
+    sfx_gain = 0.55 if vo_lines else 1.0           # sit the effects under the voice
+    af = f"[{audio_idx}:a]volume={sfx_gain}[sx]"
+    streams.append("[sx]")
 
-        if len(streams) > 1:
-            # amix divides by the input count; multiply back (works on old ffmpeg, no normalize option)
-            af += (f";{''.join(streams)}amix=inputs={len(streams)}:duration=first:dropout_transition=0,"
-                   f"volume={len(streams)}[pre]")
-        else:
-            af += ";[sx]anull[pre]"
-        # social-media loudness; explicit format so older ffmpeg builds (Render's) can negotiate it
-        af += (";[pre]aformat=sample_fmts=fltp:channel_layouts=stereo,loudnorm=I=-14:TP=-1.5:LRA=11,"
-               "aresample=44100,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a]")
+    music = sound.pick_music(music_dir) if music_dir else None
+    if music:
+        inputs += ["-stream_loop", "-1", "-i", music]
+        mg = 0.12 if vo_lines else 0.22
+        af += f";[{nxt}:a]volume={mg},afade=t=out:st={total - 1.5}:d=1.5[mu]"
+        streams.append("[mu]")
+        nxt += 1
+        log.info("Mixing music: %s", os.path.basename(music))
 
-        _run([ff, "-y", "-loglevel", "error", *inputs,
-              "-filter_complex", vf + ";" + af,
-              "-map", "[v]", "-map", "[a]", "-t", f"{total:.2f}",
-              "-c:v", "libx264", "-preset", os.environ.get("X264_PRESET", "faster"), "-crf", "17",
-              "-threads", "2", "-filter_complex_threads", "1", "-x264-params", "rc-lookahead=10:sync-lookahead=0",
-              "-profile:v", "high", "-pix_fmt", "yuv420p",
-              "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out_path])
+    for i, ln in enumerate(vo_lines):
+        inputs += ["-i", ln["path"]]
+        ms = int(ln["start"] * 1000)
+        af += f";[{nxt}:a]atempo={ln['tempo']:.3f},adelay={ms}|{ms},volume=1.0[vo{i}]"
+        streams.append(f"[vo{i}]")
+        nxt += 1
+
+    if len(streams) > 1:
+        # amix divides by the input count; multiply back (works on old ffmpeg, no normalize option)
+        af += (f";{''.join(streams)}amix=inputs={len(streams)}:duration=first:dropout_transition=0,"
+               f"volume={len(streams)}[pre]")
+    else:
+        af += ";[sx]anull[pre]"
+    # social-media loudness; explicit format so older ffmpeg builds (Render's) can negotiate it
+    af += (";[pre]aformat=sample_fmts=fltp:channel_layouts=stereo,loudnorm=I=-14:TP=-1.5:LRA=11,"
+           "aresample=44100,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a]")
+
+    _run([ff, "-y", "-loglevel", "error", *inputs,
+          "-filter_complex", vf + ";" + af,
+          "-map", "[v]", "-map", "[a]", "-t", f"{total:.2f}",
+          "-c:v", "libx264", "-preset", os.environ.get("X264_PRESET", "faster"), "-crf", "17",
+          "-threads", "1", "-filter_complex_threads", "1", "-x264-params", "rc-lookahead=8:sync-lookahead=0",
+          "-profile:v", "high", "-pix_fmt", "yuv420p",
+          "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out_path])
+
+
+def build_cinematic(spec: dict, clip_path: str, out_path: str, music_dir: str | None = None) -> str:
+    """Higgsfield workflow footage + our text overlay + notifications + end card."""
+    import cinematic
+    ff = ffmpeg_path()
+    with tempfile.TemporaryDirectory() as tmp:
+        frames = os.path.join(tmp, "overlay")
+        os.makedirs(frames)
+        spec_path = os.path.join(tmp, "spec.json")
+        with open(spec_path, "w", encoding="utf-8") as fh:
+            json.dump(spec, fh)
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cinematic.py")
+        res = subprocess.run([sys.executable, script, spec_path, frames], capture_output=True, text=True, timeout=3600)
+        if res.returncode != 0:
+            raise RuntimeError(f"overlay rendering failed: {res.stderr[-800:]}")
+        total = float(res.stdout.strip().splitlines()[-1])
+        tl = cinematic.timeline(spec)
+        events = cinematic.sound_events(spec)
+        sfx = os.path.join(tmp, "sfx.wav")
+        sound.build_track(events, sfx, total=total)
+
+        hold = max(0.0, total - tl["clip"]) + 1.0
+        vf = (f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setsar=1,"
+              f"tpad=stop_mode=clone:stop_duration={hold:.2f},trim=0:{total:.2f},setpts=PTS-STARTPTS[c];"
+              "[c][1:v]overlay=0:0,format=yuv420p[v]")
+        inputs = ["-threads", "1", "-i", clip_path, "-framerate", str(workflow_video.FPS), "-i", os.path.join(frames, "o%05d.png"),
+                  "-i", sfx]
+        cues = {"hook": 0.3, "build": events["pops"][0][0] if events["pops"] else 2.6,
+                "reveal": tl["clip"] * 0.72, "results": tl["notif"] + 0.35, "cta": tl["end"] + 0.2}
+        _mix_and_encode(ff, inputs, vf, 2, spec, cues, total, tmp, music_dir, out_path)
     return out_path

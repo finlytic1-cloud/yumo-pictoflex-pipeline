@@ -6,7 +6,8 @@
   - `higgsfield.py`: optional 3-second cinematic opener (skipped if keys are missing, it's over budget, or it fails)
   - `workflow_video.py`: the animated workflow (drawn at 3x and shrunk, so it's sharp)
   - `sound.py`: sound design generated to match every on-screen moment, plus an optional music track from `assets/music/`
-  - `voice.py`: optional ElevenLabs voiceover (5 short lines Claude writes, each placed on its moment). Needs `ELEVENLABS_API_KEY`.
+  - `cinematic.py` (default `VIDEO_MODE=cinematic`): Higgsfield generates a 10-15s high-end 3D shot of the workflow; this file draws the words on top (hook, each step as a glass chip, £ counter), then phone notifications and the end card. If Higgsfield fails or is over budget, the code-animated version (`workflow_video.py`) is used instead.
+  - `voice.py`: optional VoiceFinder voiceover (5 short lines Claude writes, each placed on its moment). Needs `VOICEFINDER_API_KEY`.
   - Each video gets a random colour theme (violet, circuit, ember, aqua) and layout (stack or zigzag).
 - `stage2_publish.py` (daily, 10:00 UTC): posts the Reel to every Pictoflex account through Post for Me (Instagram and Facebook as Reels).
 - `stage3_analytics.py`: unchanged.

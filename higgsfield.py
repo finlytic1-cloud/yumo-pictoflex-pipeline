@@ -50,17 +50,27 @@ def estimate_usd(model_path: str, body: dict) -> float | None:
 
 
 def generate_opener(prompt: str, out_path: str) -> str | None:
-    """Generate the opener clip and save it to out_path. Returns the path, or None."""
+    """Legacy short opener clip (not used by default any more)."""
+    return generate_clip(prompt, out_path, config.HIGGSFIELD_OPENER_MODEL, _body(prompt))
+
+
+def generate_workflow_clip(prompt: str, seconds: int, out_path: str) -> str | None:
+    """The main cinematic workflow footage."""
+    body = {"prompt": prompt, "duration": int(seconds)}
+    body.update(json.loads(config.HIGGSFIELD_VIDEO_PARAMS or "{}"))
+    return generate_clip(prompt, out_path, config.HIGGSFIELD_VIDEO_MODEL, body)
+
+
+def generate_clip(prompt: str, out_path: str, model: str, body: dict) -> str | None:
+    """Generate a clip and save it to out_path. Returns the path, or None."""
     if not enabled():
-        log.info("Higgsfield keys not set - skipping opener clip.")
+        log.info("Higgsfield keys not set - skipping clip.")
         return None
-    model = config.HIGGSFIELD_OPENER_MODEL
-    body = _body(prompt)
 
     usd = estimate_usd(model, body)
-    log.info("Higgsfield opener estimate for %s: %s USD", model, usd)
+    log.info("Higgsfield estimate for %s (%ss): %s USD", model, body.get("duration"), usd)
     if usd is not None and usd > config.HIGGSFIELD_MAX_USD_PER_VIDEO:
-        log.warning("Opener costs %.2f USD, over the %.2f limit - skipping.", usd, config.HIGGSFIELD_MAX_USD_PER_VIDEO)
+        log.warning("Clip costs %.2f USD, over the %.2f limit - skipping.", usd, config.HIGGSFIELD_MAX_USD_PER_VIDEO)
         return None
 
     resp = requests.post(f"{BASE}/{model}", headers=_headers(), json=body, timeout=60)
@@ -89,7 +99,7 @@ def generate_opener(prompt: str, out_path: str) -> str | None:
             video.raise_for_status()
             with open(out_path, "wb") as fh:
                 fh.write(video.content)
-            log.info("Higgsfield opener saved (%d KB)", len(video.content) // 1024)
+            log.info("Higgsfield clip saved (%d KB)", len(video.content) // 1024)
             return out_path
         if status in ("failed", "nsfw", "canceled"):
             log.error("Higgsfield job ended with %s: %s", status, data.get("error"))
